@@ -230,8 +230,14 @@ VmdPlayback g_vmd;
 // position minus the current cursor position (the cursor has not moved yet when
 // the hook runs), which keeps working while the game locks and recentres the
 // cursor. The hook only exists while the free camera runs in a focused window.
+//
+// Windows only. A device has no cursor to hook and no message queue to deliver
+// the callbacks through, so the deltas stay zero and the mouse term in
+// StepFreeCamera contributes nothing, while the rest of the free camera, the
+// motion presets, the keyframes and the VMD playback all run unchanged.
 // ---------------------------------------------------------------------------
 
+#if defined(_WIN32)
 LRESULT CALLBACK FreeCameraMouseHook(int code, WPARAM message, LPARAM data) {
     if (code == HC_ACTION && g_mouse_capture.load(std::memory_order_relaxed)) {
         const auto* info = reinterpret_cast<const MSLLHOOKSTRUCT*>(data);
@@ -250,6 +256,7 @@ LRESULT CALLBACK FreeCameraMouseHook(int code, WPARAM message, LPARAM data) {
     }
     return CallNextHookEx(nullptr, code, message, data);
 }
+#endif
 
 void ClearMouseInput() {
     g_mouse_dx.store(0, std::memory_order_relaxed);

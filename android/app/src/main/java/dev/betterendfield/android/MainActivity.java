@@ -935,6 +935,11 @@ public final class MainActivity extends Activity {
         overlay.setText(getString(R.string.diagnostics_overlay,
                 state(ModuleSettings.isOverlayEnabled(this)), "无需系统悬浮权限"));
         modules.setText(getString(R.string.diagnostics_modules, loadedModules()));
+        String runtimeLog = FrameworkSettings.readRemoteLog().trim();
+        TextView runtime = findViewById(R.id.diagnostics_runtime_log);
+        runtime.setText(runtimeLog.isEmpty()
+                ? getString(R.string.diagnostics_runtime_empty)
+                : getString(R.string.diagnostics_runtime) + "\n\n" + runtimeLog);
         findViewById(R.id.diagnostics_status).setContentDescription(
                 getString(R.string.diagnostics_ready));
     }

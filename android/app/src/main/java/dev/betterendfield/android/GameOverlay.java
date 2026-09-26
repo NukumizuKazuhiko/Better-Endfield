@@ -63,17 +63,28 @@ final class GameOverlay {
     private boolean dragged;
     private OverlayFeatures shown = OverlayFeatures.off();
     private boolean bridgeMissing;
+    private TextView journal;
+    private boolean removedByUs;
+    private final android.os.Handler mainHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable reattachCheck = this::ensureOnTop;
 
     static void install(Application app, ClassLoader loader, Supplier<OverlayFeatures> features) {
+        RuntimeLog.record("overlay install: checking UnityPlayer");
         try {
             Class.forName("com.unity3d.player.UnityPlayer", false, loader);
         } catch (ClassNotFoundException notUnity) {
+            RuntimeLog.record("overlay skipped: UnityPlayer class not found");
             return;
         }
+        RuntimeLog.record("overlay install: UnityPlayer found, registering lifecycle");
         app.registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
             private final java.util.Map<Activity, GameOverlay> surfaces = new java.util.HashMap<>();
 
             @Override public void onActivityResumed(Activity activity) {
+                // Make sure the save dialog's result can reach us even if this
+                // activity overrides onActivityResult without calling super.
+                XposedEntry.hookConcreteActivityResult(activity.getClass());
                 OverlayFeatures current;
                 try {
                     current = features.get();
@@ -81,11 +92,26 @@ final class GameOverlay {
                     current = OverlayFeatures.off();
                 }
                 GameOverlay surface = surfaces.get(activity);
+                if (surface != null && surface.host.getParent() == null) {
+                    // Game SDKs re-call setContentView on resume, which strips
+                    // every child of the content view — including our host.
+                    // A detached host can never become visible again; rebuild
+                    // the surface on the current content view instead.
+                    surfaces.remove(activity);
+                    RuntimeLog.record("overlay host detached by setContentView; rebuilding");
+                    // Disarm the discarded surface's re-attach watchdog so it
+                    // cannot resurrect an orphaned host next to the new one.
+                    surface.remove();
+                    surface = null;
+                }
                 if (current.panel() && surface == null) {
                     try {
                         surface = new GameOverlay(activity, false, features);
                         surfaces.put(activity, surface);
+                        RuntimeLog.record("overlay panel attached to "
+                                + activity.getClass().getName());
                     } catch (RuntimeException error) {
+                        RuntimeLog.record("overlay panel attach failed: " + error);
                         android.util.Log.e("BetterEndfield.Overlay", "Unable to attach panel", error);
                     }
                 }
@@ -93,8 +119,17 @@ final class GameOverlay {
                 // A setting changed while the game was in the background has to
                 // reach the controls, not just the panel's visibility.
                 surface.refresh();
+                surface.updateJournal();
                 surface.host.setVisibility(
                         current.panel() && !surface.closed ? View.VISIBLE : View.GONE);
+                RuntimeLog.record("activity resumed: host attached="
+                        + (surface.host.getParent() != null));
+                // The SDK may rebuild or bury the game view after this callback
+                // returns; re-check the overlay's placement once the dust
+                // settles rather than trusting this instant.
+                surface.mainHandler.removeCallbacks(surface.reattachCheck);
+                surface.mainHandler.postDelayed(surface.reattachCheck, 400);
+                surface.mainHandler.postDelayed(surface.reattachCheck, 1500);
             }
 
             @Override public void onActivityPaused(Activity activity) {
@@ -136,6 +171,19 @@ final class GameOverlay {
         // The host has no click listener of its own, so a touch anywhere except
         // the handle and the panel goes straight through to the game.
         activity.addContentView(host, new ViewGroup.LayoutParams(-1, -1));
+        // Game SDKs can strip the content view AFTER onActivityResumed returns
+        // (a deferred setContentView), which the resume-time check cannot see.
+        // The detach callback is the only reliable signal of that; re-attach
+        // the same host shortly afterwards so the overlay survives.
+        host.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+            @Override public void onViewAttachedToWindow(View v) { }
+            @Override public void onViewDetachedFromWindow(View v) {
+                if (removedByUs) return;
+                RuntimeLog.record("overlay host detached; re-attach scheduled");
+                mainHandler.removeCallbacks(reattachCheck);
+                mainHandler.postDelayed(reattachCheck, 400);
+            }
+        });
         host.setOnApplyWindowInsetsListener((view, insets) -> {
             host.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
                     insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
@@ -233,6 +281,23 @@ final class GameOverlay {
             }
             if (current.freeCamera()) {
                 content.addView(movementPad());
+                group("运镜 / 关键帧");
+                content.addView(action("运镜 播放/停止", Hotkeys.MOTION_NAME,
+                        Hotkeys.MOTION, "播放或停止预设运镜"));
+                content.addView(action("视角回正", Hotkeys.VIEW_RESET_NAME,
+                        Hotkeys.VIEW_RESET, "把自由镜头复位到默认朝向"));
+                content.addView(action("广角 +", Hotkeys.FOV_WIDE_NAME,
+                        Hotkeys.FOV_WIDE, "加大视场角"));
+                content.addView(action("长焦 +", Hotkeys.FOV_NARROW_NAME,
+                        Hotkeys.FOV_NARROW, "收窄视场角"));
+                content.addView(hold("滚转 ↺", Hotkeys.ROLL_LEFT, "逆时针滚转"));
+                content.addView(hold("滚转 ↻", Hotkeys.ROLL_RIGHT, "顺时针滚转"));
+                content.addView(action("记录关键帧", Hotkeys.KEYFRAME_ADD_NAME,
+                        Hotkeys.KEYFRAME_ADD, "把当前镜头位姿记为关键帧"));
+                content.addView(action("回放关键帧", Hotkeys.KEYFRAME_PLAY_NAME,
+                        Hotkeys.KEYFRAME_PLAY, "沿已记录的关键帧运镜"));
+                content.addView(action("清除关键帧", Hotkeys.KEYFRAME_CLEAR_NAME,
+                        Hotkeys.KEYFRAME_CLEAR, "清空已记录的关键帧"));
             }
         }
 
@@ -249,6 +314,16 @@ final class GameOverlay {
                         openSettings();
                     }
                 }), stacked(14));
+
+        // The journal lives in this very process, so displaying it here cannot
+        // lose anything to a broken transport. If this section is missing from
+        // the panel entirely, the hooked game is still running an older module
+        // build (re-toggle the module in LSPosed or reboot to reload it).
+        if (!preview) {
+            group("运行日志");
+            content.addView(journalView(), stacked(8));
+            content.addView(ghost("保存日志到文件", view -> saveJournalToFile()), stacked(6));
+        }
 
         footer.setText(preview
                 ? "预览模式：按钮不会发送指令。"
@@ -291,6 +366,156 @@ final class GameOverlay {
         });
         header.addView(collapse);
         return header;
+    }
+
+    /** Builds the tappable journal box; long-press copies the full ring. */
+    private View journalView() {
+        TextView view = new TextView(activity);
+        view.setTypeface(Typeface.MONOSPACE);
+        view.setTextSize(9);
+        view.setTextColor(TEXT_DIM);
+        view.setPadding(dp(10), dp(9), dp(10), dp(9));
+        view.setBackground(surface(0xFF141A22, 13, BORDER));
+        view.setContentDescription("运行日志，点按刷新，长按复制全部");
+        view.setOnClickListener(v -> updateJournal());
+        view.setOnLongClickListener(v -> {
+            String all = RuntimeLog.tail(150);
+            android.content.ClipboardManager clipboard =
+                    (android.content.ClipboardManager) activity.getSystemService(
+                            android.content.Context.CLIPBOARD_SERVICE);
+            if (clipboard != null) {
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
+                        "BetterEndfield 运行日志", all.isEmpty() ? "(empty)" : all));
+                toast("运行日志已复制（" + all.split("\n").length + " 行）");
+            }
+            return true;
+        });
+        journal = view;
+        updateJournal();
+        return view;
+    }
+
+    private void updateJournal() {
+        TextView view = journal;
+        if (view == null) return;
+        String stamp = "构建 " + BuildConfig.VERSION_NAME
+                + " (" + BuildConfig.VERSION_CODE + ") · 点按刷新 · 长按复制 · 下方按钮另存";
+        String lines = RuntimeLog.tail(14);
+        view.setText(lines.isEmpty()
+                ? stamp + "\n（暂无记录）"
+                : stamp + "\n" + lines.trim());
+    }
+
+    /** Request code for the system save dialog; must fit in the lower 16 bits. */
+    private static final int REQUEST_SAVE_LOG = 0x1E10;
+    /** The overlay surface waiting for the system save dialog to return. */
+    private static GameOverlay saveRequester;
+    /** Log text captured when the save dialog was opened. */
+    private static String pendingSaveBody;
+
+    /**
+     * Opens the system save dialog (SAF ACTION_CREATE_DOCUMENT) so the user
+     * picks where the log lands - Downloads, a cloud drive, anywhere. Needs no
+     * storage permission. When the dialog cannot start or its result cannot
+     * reach the hooked process, falls back to the share sheet instead.
+     */
+    private void saveJournalToFile() {
+        pendingSaveBody = buildJournalBody();
+        if (XposedEntry.activityResultRelayReady()) {
+            try {
+                String stamp = new java.text.SimpleDateFormat(
+                        "yyyyMMdd-HHmmss", java.util.Locale.ROOT).format(new java.util.Date());
+                Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                save.addCategory(Intent.CATEGORY_OPENABLE);
+                save.setType("text/plain");
+                save.putExtra(Intent.EXTRA_TITLE, "betterendfield-log-" + stamp + ".txt");
+                saveRequester = this;
+                XposedEntry.setActivityResultListener(GameOverlay::dispatchSaveResult);
+                activity.startActivityForResult(save, REQUEST_SAVE_LOG);
+                RuntimeLog.record("journal save: location picker opened");
+                return;
+            } catch (Throwable pickerFailed) {
+                saveRequester = null;
+                RuntimeLog.record("journal save picker unavailable: " + pickerFailed);
+            }
+        } else {
+            RuntimeLog.record("journal save: activity result relay absent, sharing instead");
+        }
+        shareJournal(pendingSaveBody);
+    }
+
+    /** Receives the system save dialog's outcome and writes the log there. */
+    private static void dispatchSaveResult(int requestCode, int resultCode, Intent data) {
+        GameOverlay surface = saveRequester;
+        if (surface == null || requestCode != REQUEST_SAVE_LOG) return;
+        saveRequester = null;
+        android.net.Uri target = resultCode == Activity.RESULT_OK && data != null
+                ? data.getData() : null;
+        if (target == null) {
+            surface.toast("已取消保存");
+            return;
+        }
+        String body = pendingSaveBody == null ? "" : pendingSaveBody;
+        pendingSaveBody = null;
+        new Thread(() -> {
+            String outcome;
+            try (java.io.OutputStream out = surface.activity.getContentResolver()
+                    .openOutputStream(target)) {
+                if (out == null) throw new java.io.IOException("provider returned no stream");
+                out.write(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                outcome = "日志已保存到所选位置";
+                RuntimeLog.record("journal saved: " + target);
+            } catch (Exception error) {
+                RuntimeLog.record("journal save failed: " + error);
+                outcome = "日志保存失败: " + error.getMessage();
+            }
+            String message = outcome;
+            surface.mainHandler.post(() -> surface.toast(message));
+        }, "BetterEndfield-SaveJournal").start();
+    }
+
+    /**
+     * Share-sheet fallback for devices where the save dialog cannot start or
+     * its result cannot reach us: the plain-text log travels via ACTION_SEND,
+     * from where any files app can store it wherever the user chooses. Needs
+     * no storage permission and no FileProvider declaration in the host.
+     */
+    private void shareJournal(String body) {
+        try {
+            Intent send = new Intent(Intent.ACTION_SEND);
+            send.setType("text/plain");
+            send.putExtra(Intent.EXTRA_SUBJECT, "Better-Endfield 运行日志");
+            send.putExtra(Intent.EXTRA_TEXT, body);
+            activity.startActivity(Intent.createChooser(send, "分享运行日志"));
+            RuntimeLog.record("journal share opened");
+        } catch (Throwable shareFailed) {
+            RuntimeLog.record("journal share failed: " + shareFailed);
+            toast("日志保存失败: " + shareFailed.getMessage());
+        }
+    }
+
+    /** Assembles the journal text: java ring plus the native log tail. */
+    private String buildJournalBody() {
+        String stamp = new java.text.SimpleDateFormat(
+                "yyyyMMdd-HHmmss", java.util.Locale.ROOT).format(new java.util.Date());
+        StringBuilder nativeTail = new StringBuilder();
+        try {
+            NativeCommandBridge.tailNativeLog(nativeTail, new long[]{0L});
+        } catch (RuntimeException unavailable) {
+            nativeTail.append("(native journal unavailable: ").append(unavailable).append(')');
+        }
+        String nativeText = nativeTail.toString();
+        if (nativeText.length() > 40000) nativeText = nativeText.substring(nativeText.length() - 40000);
+        return new StringBuilder()
+                .append("Better-Endfield journal build ")
+                .append(BuildConfig.VERSION_NAME).append(" (")
+                .append(BuildConfig.VERSION_CODE).append(")\n")
+                .append("saved at ").append(stamp).append("\n\n")
+                .append("---- java journal (newest last) ----\n")
+                .append(RuntimeLog.tail(150).trim()).append("\n\n")
+                .append("---- native journal (newest last) ----\n")
+                .append(nativeText.trim()).append('\n')
+                .toString();
     }
 
     private void group(String name) {
@@ -439,19 +664,33 @@ final class GameOverlay {
             return;
         }
         try {
+            // False before RuntimeBootstrap.configure() opened the file relay,
+            // i.e. while the native runtime cannot have loaded yet. Once the
+            // channel exists every event is delivered; the native relay latches
+            // it (presses held, pulses expiring) whenever it starts.
             if (!NativeCommandBridge.key(virtualKey, action)) {
-                toast("无法发送「" + description + "」");
+                RuntimeLog.record("key rejected (relay not configured): " + description
+                        + " (vk " + Integer.toHexString(virtualKey) + ")");
+                if (!bridgeMissing) {
+                    bridgeMissing = true;
+                    toast("增强运行时尚未载入，请稍后重试");
+                }
+            } else if (!keyPathProven) {
+                keyPathProven = true;
+                bridgeMissing = false;
+                RuntimeLog.record("key send ok; file relay active ("
+                        + description + ", vk " + Integer.toHexString(virtualKey) + ")");
             }
-            bridgeMissing = false;
-        } catch (UnsatisfiedLinkError | NoSuchMethodError unavailable) {
-            // Before the first Unity frame the runtime is not loaded yet, and if a
-            // module was never configured it never will be. Say so once.
+        } catch (Throwable failure) {
+            RuntimeLog.record("key " + description + " failed: " + failure);
             if (!bridgeMissing) {
                 bridgeMissing = true;
-                toast("增强运行时尚未载入，请稍后重试");
+                toast("按键发送失败，请稍后重试");
             }
         }
     }
+
+    private static boolean keyPathProven;
 
     private void releaseHeldKeys() {
         if (preview) return;
@@ -554,10 +793,38 @@ final class GameOverlay {
     }
 
     void remove() {
+        removedByUs = true;
+        mainHandler.removeCallbacks(reattachCheck);
         closed = true;
         releaseHeldKeys();
         if (host.getParent() instanceof ViewGroup) {
             ((ViewGroup) host.getParent()).removeView(host);
+        }
+    }
+
+    private void ensureOnTop() {
+        if (removedByUs || closed || activity.isDestroyed() || activity.isFinishing()) return;
+        android.view.ViewGroup content = activity.findViewById(android.R.id.content);
+        if (content == null) return;
+        if (host.getParent() == content) {
+            // setContentView-style rebuilds can leave our host attached but
+            // underneath the freshly added game view; the detach watchdog
+            // never fires because the host was never detached. Only the
+            // z-order tells the truth.
+            if (content.getChildAt(content.getChildCount() - 1) != host) {
+                content.bringChildToFront(host);
+                RuntimeLog.record("overlay host re-raised above the game view");
+            }
+            return;
+        }
+        if (host.getParent() instanceof android.view.ViewGroup) {
+            ((android.view.ViewGroup) host.getParent()).removeView(host);
+        }
+        try {
+            content.addView(host, new ViewGroup.LayoutParams(-1, -1));
+            RuntimeLog.record("overlay host re-added to the content view");
+        } catch (RuntimeException error) {
+            RuntimeLog.record("overlay re-attach failed: " + error);
         }
     }
 

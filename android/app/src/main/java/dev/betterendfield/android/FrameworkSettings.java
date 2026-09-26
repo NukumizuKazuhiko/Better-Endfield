@@ -59,8 +59,13 @@ final class FrameworkSettings {
     }
 
     static synchronized String readRemoteStatus() {
+        return readRemoteFile("command.status");
+    }
+
+    /** Reads a file from the module's remote (LSPosed service) file space; "" when unavailable. */
+    static synchronized String readRemoteFile(String name) {
         if (remoteService == null) return "";
-        try (ParcelFileDescriptor descriptor = remoteService.openRemoteFile("command.status");
+        try (ParcelFileDescriptor descriptor = remoteService.openRemoteFile(name);
                 BufferedReader reader = new BufferedReader(new InputStreamReader(
                         new ParcelFileDescriptor.AutoCloseInputStream(descriptor),
                         java.nio.charset.StandardCharsets.UTF_8))) {
@@ -68,6 +73,18 @@ final class FrameworkSettings {
             while ((line = reader.readLine()) != null) value.append(line).append('\n');
             return value.toString();
         } catch (RuntimeException | java.io.IOException error) { return ""; }
+    }
+
+    /**
+     * The game process journals its load pipeline into the remote preference
+     * "runtime_log" ({@link RuntimeLog}); read it back here for the
+     * diagnostics page.
+     */
+    static synchronized String readRemoteLog() {
+        if (remoteService == null) return "";
+        try {
+            return service.getRemotePreferences("runtime_log").getString("log", "");
+        } catch (RuntimeException error) { return ""; }
     }
 
     static SharedPreferences open(Context context) {

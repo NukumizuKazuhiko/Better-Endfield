@@ -36,6 +36,19 @@ final class RuntimeBootstrap {
             return;
         }
         if (!PREPARED.compareAndSet(false, true)) return;
+        // The panel presses keys through a file relay (NativeCommandBridge /
+        // input_relay.cpp), not JNI: the runtime registers under the game's
+        // classloader, the panel's classes under the module classloader, and
+        // Android scopes both JNI lookup and .so openings per classloader.
+        // Opening the channel here also truncates the stream, so a fresh
+        // session never replays the previous one's events.
+        File relayDir = new File(application.getFilesDir(), "betterendfield");
+        if (!relayDir.isDirectory() && !relayDir.mkdirs()) {
+            log.accept("input relay directory unavailable: " + relayDir);
+        }
+        NativeCommandBridge.configure(
+                new File(relayDir, "input.latch"), new File(relayDir, "status.txt"),
+                new File(relayDir, "native.log"));
         Thread worker = new Thread(() -> {
             String poseRoot = "";
             if (!configs.voice().isEmpty() || configs.needsActionPoses()) {
@@ -76,6 +89,7 @@ final class RuntimeBootstrap {
             // Recheck after acquiring the guard: another frame may have completed.
             if (loaded || ATTEMPTS.get() >= 3) return true;
             ATTEMPTS.incrementAndGet();
+            log.accept("native load attempt " + ATTEMPTS.get() + "/3 starting");
             Context module = context.createPackageContext(MODULE_PACKAGE,
                     Context.CONTEXT_IGNORE_SECURITY | Context.CONTEXT_INCLUDE_CODE);
             File library = new File(module.getApplicationInfo().nativeLibraryDir,
@@ -93,9 +107,17 @@ final class RuntimeBootstrap {
                     new File(context.getFilesDir(), "betterendfield/catalog").getAbsolutePath(), true);
             if (BuildConfig.DEBUG) Os.setenv("BETTER_ENDFIELD_DIAGNOSTICS_PATH",
                     new File(context.getCacheDir(), "betterendfield-diagnostics.log").getAbsolutePath(), true);
+            Os.setenv("BETTER_ENDFIELD_INPUT_FILE",
+                    new File(context.getFilesDir(), "betterendfield/input.latch").getAbsolutePath(), true);
+            Os.setenv("BETTER_ENDFIELD_STATUS_FILE",
+                    new File(context.getFilesDir(), "betterendfield/status.txt").getAbsolutePath(), true);
+            Os.setenv("BETTER_ENDFIELD_NATIVE_LOG",
+                    new File(context.getFilesDir(), "betterendfield/native.log").getAbsolutePath(), true);
             loadIntoTargetNamespace(library.getAbsolutePath(), context.getClassLoader(), application.getClass());
             loaded = true;
             log.accept("native runtime loaded; " + configs.summary());
+            log.accept("panel input channel: file relay "
+                    + new File(context.getFilesDir(), "betterendfield/input.latch"));
         } catch (Throwable error) {
             log.accept("native runtime load attempt " + ATTEMPTS.get() + "/3 failed: " + error);
         } finally {

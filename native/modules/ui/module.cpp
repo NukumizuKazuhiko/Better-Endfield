@@ -1190,7 +1190,9 @@ bool ResolveContracts() {
     }
 
     int resolved_count = 0;
+    int contract_total = 0;
     for (auto& contract : g_contracts) {
+        ++contract_total;
         BE_ResolvedMethodV1 resolved{};
         const BE_Result result = g_host->resolve_method(
             g_host->context, &contract.descriptor, &resolved);
@@ -1228,7 +1230,9 @@ bool ResolveContracts() {
             } else if (std::string_view(contract.key) == "behaviour.set_enabled") {
                 g_behaviour_set_enabled_method = resolved.method_info;
             }
-            Log(std::string("Resolved method contract: ") + contract.key);
+            ++resolved_count; // Per-contract lines flood the journal ring and
+                              // crowd out the actions diagnostics; a summary
+                              // keeps the startup footprint small.
         } else {
             contract.resolved = false;
             Log(std::string("Optional method not found: ") + contract.key);
@@ -1270,6 +1274,8 @@ bool ResolveContracts() {
         Log("Optional class not found: unity.ui.graphic");
     }
 
+    Log((std::string("UI contracts: ") + std::to_string(resolved_count) + " of " +
+         std::to_string(contract_total) + " methods resolved.").c_str());
     return resolved_count > 0;
 }
 
@@ -1278,6 +1284,8 @@ bool InstallHooks() {
         return false;
     }
 
+    int hooked_count = 0;
+    int hookable_count = 0;
     for (auto& contract : g_contracts) {
         if (!contract.resolved || !contract.pointer) {
             continue;
@@ -1377,16 +1385,19 @@ bool InstallHooks() {
         }
 
         if (detour && original) {
+            ++hookable_count;
             const BE_Result res = g_host->create_hook(
                 g_host->context, kModuleId, contract.pointer, detour, original);
             if (res != BE_Result_Ok) {
                 Log(std::string("Failed to install hook for: ") + contract.key);
             } else {
-                Log(std::string("Successfully hooked: ") + contract.key);
+                ++hooked_count;
             }
         }
     }
 
+    Log((std::string("UI hooks: ") + std::to_string(hooked_count) + " of " +
+         std::to_string(hookable_count) + " installed.").c_str());
     return true;
 }
 

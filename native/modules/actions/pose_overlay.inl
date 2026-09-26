@@ -156,7 +156,7 @@ void ApplyPoseOverlay(void* component,float delta){
     if(generation!=g_pose_generation)return;
     QueryPerformanceCounter(&end);g_pose_owner.microseconds+=(end.QuadPart-begin.QuadPart)*1e6/frequency.QuadPart;
     ++g_pose_owner.writes;
-    if(g_pose_owner.writes<=2||g_pose_owner.writes%120==0){
+    if(g_pose_owner.writes<=1||g_pose_owner.writes%600==0){
         char text[240]{};std::snprintf(text,sizeof(text),"Sustained dash v12: TailLate pose applied side=%s bones=%zu weight=%.3f time=%.3f frame=%d count=%u mean_us=%.1f; Animator remains native.",selected==0?"left":"right",g_pose_owner.bindings.size(),weight,seconds,frame_id,g_pose_owner.writes,g_pose_owner.microseconds/g_pose_owner.writes);Log(text);
     }
 }

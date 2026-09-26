@@ -173,7 +173,7 @@ final class ModuleSettings {
         boolean pause = worldPause && freeCamera;
         boolean any = disableDither || freeCamera || firstPerson;
         String configuration = any
-                ? "schema_version=2\n"
+                ? "schema_version=3\n"
                         + "enabled=true\n"
                         + "diagnostics=true\n"
                         + "disable_dither_enabled=" + disableDither + "\n"
@@ -188,6 +188,28 @@ final class ModuleSettings {
                         + "toggle_hotkey=" + Hotkeys.FREE_CAMERA_NAME + "\n"
                         + "pause_hotkey=" + Hotkeys.WORLD_PAUSE_NAME + "\n"
                         + "first_person_hotkey=" + Hotkeys.FIRST_PERSON_NAME + "\n"
+                        // There is no cursor to hook on a phone; without this
+                        // the desktop default (true) would arm the low-level
+                        // mouse hook the moment the free camera comes up.
+                        + "free_camera_mouse_look=false\n"
+                        + "mouse_invert_y=false\n"
+                        + "mouse_sensitivity=0.1\n"
+                        + "free_camera_smoothing=0.3\n"
+                        + "keyframe_loop=false\n"
+                        + "vmd_camera_loop=false\n"
+                        // The panel presses the exact codes the desktop module
+                        // polls; pin them so a native default change cannot
+                        // silently detach the on-screen buttons.
+                        + "roll_left_hotkey=" + Hotkeys.ROLL_LEFT_NAME + "\n"
+                        + "roll_right_hotkey=" + Hotkeys.ROLL_RIGHT_NAME + "\n"
+                        + "fov_wide_hotkey=" + Hotkeys.FOV_WIDE_NAME + "\n"
+                        + "fov_narrow_hotkey=" + Hotkeys.FOV_NARROW_NAME + "\n"
+                        + "view_reset_hotkey=" + Hotkeys.VIEW_RESET_NAME + "\n"
+                        + "motion_hotkey=" + Hotkeys.MOTION_NAME + "\n"
+                        + "keyframe_add_hotkey=" + Hotkeys.KEYFRAME_ADD_NAME + "\n"
+                        + "keyframe_play_hotkey=" + Hotkeys.KEYFRAME_PLAY_NAME + "\n"
+                        + "keyframe_clear_hotkey=" + Hotkeys.KEYFRAME_CLEAR_NAME + "\n"
+                        + "vmd_play_hotkey=" + Hotkeys.VMD_PLAY_NAME + "\n"
                 : "";
         preferences(context)
                 .edit()

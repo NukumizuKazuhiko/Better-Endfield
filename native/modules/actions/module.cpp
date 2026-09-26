@@ -117,6 +117,9 @@ private:
 #endif
 ConfigurationSlot g_config{std::make_shared<Configuration>()};
 const BE_HostApiV1* g_host = nullptr;
+// Enum literal boxing fails on some clients; the Enum.Parse fallback per
+// constant would spam one line each, so init reports one summary instead.
+int g_enum_parse_fallbacks = 0;
 std::atomic_bool g_stopping{false};
 std::atomic<DWORD> g_game_thread{0};
 
@@ -621,10 +624,10 @@ void Cancel(const char* reason, bool stop_perform, bool restore_parameter = true
         g_set_dashing(old.blackboard, old.last_requested_dashing, g_methods[SetDashing].resolved.method_info);
     // Clear ownership before invoking the game; stop callbacks may re-enter us.
     if (restore_parameter && old.deferred_flying_stop && old.entity && g_audio_entity) {
+        const uint32_t stop_hash = old.profile ? g_flying_stop_hashes[old.profile - kCharacters] : 0;
         bool ok = true;
-        if (Value<bool>(EntityValid, old.entity, ok) && ok)
-            g_audio_entity(old.entity, old.profile ? g_flying_stop_hashes[old.profile - kCharacters] : 0,
-                g_audio_none, nullptr, nullptr,
+        if (stop_hash && Value<bool>(EntityValid, old.entity, ok) && ok)
+            g_audio_entity(old.entity, stop_hash, g_audio_none, nullptr, nullptr,
                 g_methods[AudioEntityPost].resolved.method_info);
     }
     if (stop_perform && CurrentRequestHandle(old.component) == old.handle && g_interrupt)
@@ -909,7 +912,7 @@ bool DeferFlyingStop(uint32_t hash) {
     return true;
 }
 void __fastcall AudioMonoDetour(void* mono, uint32_t hash, float clip_in, const void* method) {
-    if (GetCurrentThreadId() == g_game_thread.load(std::memory_order_relaxed) &&
+    if (hash != 0 && GetCurrentThreadId() == g_game_thread.load(std::memory_order_relaxed) &&
         hash == SessionFlyingStopHash() && g_session.component) {
         bool ok = true;
         void* component = Object(AudioMonoComponent, mono, ok);
@@ -960,22 +963,83 @@ void __fastcall StartDetour(void* component, int index, const void* method) {
     g_game_thread.store(GetCurrentThreadId(), std::memory_order_relaxed);
     g_start(component, index, method);
     auto config = g_config.load();
+    if (config->diagnostics) {
+        // Logged before every gate: a hold that never arms must still show
+        // that the entry fired, and why it was skipped (disabled config,
+        // stopping runtime, negative index).
+        char text[96];
+        std::snprintf(text, sizeof(text), "StartSpDash fired: index=%d", index);
+        Log(text);
+    }
     if (g_stopping || !config->enabled || !component || index < 0) return;
     const CharacterProfile* profile = nullptr;
-    if (!CanMove(component, &profile)) return;
+    const bool can = CanMove(component, &profile);
+    if (config->diagnostics) {
+        // The hold silently skips every disqualifying Start; surface which
+        // gate failed (wrong character / not the main entity / movement
+        // state does not read as a dash) or whether Start never fires.
+        bool ok0 = true;
+        void* entity = Object(GetEntity, component, ok0);
+        void* data = ok0 && entity ? Object(GetTemplate, entity, ok0) : nullptr;
+        void* id = ok0 && data ? FieldObject(TemplateId, data) : nullptr;
+        char idbuf[64]{};
+        if (id) g_host->copy_managed_string(g_host->context, id, idbuf, sizeof(idbuf));
+        char text[160];
+        std::snprintf(text, sizeof(text), "StartSpDash template=%s, movement_check=%s",
+                      idbuf[0] ? idbuf : "unreadable", can ? "ok" : "failed");
+        Log(text);
+    }
+    if (!can) return;
     if (!(config->characters & (1u << (profile - kCharacters)))) return;
     bool ok = true;
+    // Mobile il2cpp builds refuse to box static fields through
+    // il2cpp_field_get_value_object (same failure as the enum literals);
+    // il2cpp_field_static_get_value reads the storage directly.
+    using StaticGetFn = void(*)(const void*, void*);
+    auto static_get = reinterpret_cast<StaticGetFn>(GetProcAddress(GetModuleHandleW(L"GameAssembly.dll"), "il2cpp_field_static_get_value"));
     // This class is already initialized by the original StartSpDash. Read the
     // game's real state identifiers, not names guessed from documentation.
-    for (int side = 0; side < 2; ++side)
-        g_hashes[side] = Unbox<int>(g_host->field_get_value_object(g_host->context, g_hash_fields[side], nullptr), ok);
-    for (int i = 0; i < 2; ++i)
-        g_locomotion_hashes[i] = Unbox<int>(g_host->field_get_value_object(g_host->context, g_locomotion_fields[i], nullptr), ok);
-    if (!ok || !g_hashes[0] || !g_hashes[1] || g_hashes[0] == g_hashes[1]) return;
+    // Each read is judged on its own recovered value: the boxing path may
+    // fail (clearing a shared flag) while the direct storage read succeeds,
+    // so a stale flag must never veto healthy values. The device log proved
+    // exactly that: static_get returned two distinct non-zero hashes while
+    // the shared ok flag still read false.
+    for (int side = 0; side < 2; ++side) {
+        bool boxed = true;
+        g_hashes[side] = Unbox<int>(g_host->field_get_value_object(g_host->context, g_hash_fields[side], nullptr), boxed);
+        if ((!boxed || !g_hashes[side]) && static_get && g_hash_fields[side]) {
+            int value = 0;
+            static_get(g_hash_fields[side], &value);
+            g_hashes[side] = value;
+        }
+    }
+    for (int i = 0; i < 2; ++i) {
+        bool boxed = true;
+        g_locomotion_hashes[i] = Unbox<int>(g_host->field_get_value_object(g_host->context, g_locomotion_fields[i], nullptr), boxed);
+        if ((!boxed || !g_locomotion_hashes[i]) && static_get && g_locomotion_fields[i]) {
+            int value = 0;
+            static_get(g_locomotion_fields[i], &value);
+            g_locomotion_hashes[i] = value;
+        }
+    }
+    if (!g_hashes[0] || !g_hashes[1] || g_hashes[0] == g_hashes[1] ||
+        !g_locomotion_hashes[0] || !g_locomotion_hashes[1]) {
+        if (config->diagnostics)
+            Log((std::string("Sustained dash Start: HASH state unreadable (") +
+                 std::to_string(g_hashes[0]) + "/" + std::to_string(g_hashes[1]) +
+                 "); hold not armed.").c_str());
+        return;
+    }
     void* blackboard = Object(GetBlackboard, component, ok);
-    if (!ok) return;
+    if (!ok) {
+        if (config->diagnostics) Log("Sustained dash Start: blackboard unreadable; hold not armed.");
+        return;
+    }
     void* handle = OwnedPerform(component, profile);
-    if (!handle) return;
+    if (!handle) {
+        if (config->diagnostics) Log("Sustained dash Start: no owned SpDash perform handle; hold not armed.");
+        return;
+    }
     // Repeated calls for the same perform are not a fresh animation session.
     if (g_session.component == component && g_session.handle == handle) return;
     Cancel("new special dash", true);
@@ -1065,7 +1129,7 @@ void __fastcall PreLateDetour(void* component, float delta, const void* method) 
                     // Managed playback may synchronously deliver a native exit.
                 } else if (ok) {
                     ++g_session.animation_replays;
-                    if (g_session.config->diagnostics && (g_session.animation_replays <= 4 || g_session.animation_replays % 16 == 0)) {
+                    if (g_session.config->diagnostics && (g_session.animation_replays <= 1 || g_session.animation_replays % 64 == 0)) {
                         char text[240];
                         std::snprintf(text, sizeof(text), "Sustained dash %s: hash=%d, source=%.3f, target=%.3f, duration=%.3f, count=%u",
                             g_session.external_confirmed ? "v11 imported loop wrap" : "v9 normalized bob blend", hash, frame.time, offset, duration, g_session.animation_replays);
@@ -1102,16 +1166,10 @@ void __fastcall PreLateDetour(void* component, float delta, const void* method) 
                 }
             }
             if (g_session.component && frame.current_special && std::isfinite(frame.time)) {
-                int bucket = static_cast<int>(std::min(100.0f, std::max(0.0f, frame.time)) * 10.0f);
-                if (bucket != g_session.last_progress_bucket) {
-                    g_session.last_progress_bucket = bucket;
-                    if (g_session.config->diagnostics) {
-                        char text[224];
-                        std::snprintf(text, sizeof(text), "Sustained dash animation progress: time=%.3f, next=%.3f, transition=%d, length=%.3f, clip_loop=%d, deferred=%u",
-                            frame.time, frame.next_time, frame.transitioning, frame.length, frame.clip_loop, g_session.natural_end_deferrals);
-                        Log(text);
-                    }
-                }
+                // Progress ticks used to log every 100 ms bucket; that flood
+                // is gone — the journal keeps session-level events only.
+                g_session.last_progress_bucket =
+                    static_cast<int>(std::min(100.0f, std::max(0.0f, frame.time)) * 10.0f);
             }
         }
     }
@@ -1252,13 +1310,23 @@ BE_Result BE_CALL Initialize(const BE_HostApiV1* host) {
     // Protect against the easy-to-miss static ShouldInterruptSpDash ABI.
     using FlagsFn = uint32_t(*)(const void*, uint32_t*);
     auto flags = reinterpret_cast<FlagsFn>(GetProcAddress(GetModuleHandleW(L"GameAssembly.dll"), "il2cpp_method_get_flags"));
-    if (!flags) return BE_Result_ContractMismatch;
+    if (!flags) {
+        Log("il2cpp_method_get_flags is unavailable in this client.");
+        return BE_Result_ContractMismatch;
+    }
+    // Collect every contract deviation before bailing out: each build/test
+    // round trip is expensive, and early returns used to hide all but the
+    // first mismatch on the mobile client.
+    std::string contract_failures;
+    auto contract_fail = [&](const char* msg) {
+        contract_failures += msg;
+        contract_failures += '\n';
+    };
     for (int i = Start; i <= Release; ++i) {
         uint32_t impl = 0;
         bool is_static = (flags(g_methods[i].resolved.method_info, &impl) & 0x10u) != 0;
         if (is_static != (i == ShouldInterrupt)) {
-            Log("Action hook static/instance contract mismatch.");
-            return BE_Result_ContractMismatch;
+            contract_fail("Action hook static/instance contract mismatch.");
         }
     }
     bool ok = true;
@@ -1267,16 +1335,65 @@ BE_Result BE_CALL Initialize(const BE_HostApiV1* host) {
     // offset or a hard-coded numeric Sprint value.
     using FindFieldFn = void*(*)(const void*, const char*);
     auto find_field = reinterpret_cast<FindFieldFn>(GetProcAddress(GetModuleHandleW(L"GameAssembly.dll"), "il2cpp_class_get_field_from_name"));
-    if (!find_field) return BE_Result_ContractMismatch;
+    if (!find_field) {
+        Log("il2cpp_class_get_field_from_name is unavailable in this client.");
+        return BE_Result_ContractMismatch;
+    }
     auto static_field = [&](const char* ns, const char* cls, const char* name) -> const void* {
         BE_ResolvedClassV1 resolved{};
         if (host->resolve_class(host->context, kGame, ns, cls, &resolved) != BE_Result_Ok) return nullptr;
         return find_field(resolved.class_info, name);
     };
+    // Some mobile il2cpp builds refuse to box enum literals through
+    // il2cpp_field_get_value_object. System.Enum.Parse(type, name) goes
+    // through managed reflection instead and works on every runtime.
+    auto enum_parse_box = [&](const void* enum_class_info, const char* name) -> void* {
+        auto game_module = GetModuleHandleW(L"GameAssembly.dll");
+        using MethodFromNameFn = void*(*)(const void*, const char*, int);
+        using ClassTypeFn2 = const void*(*)(void*);
+        using TypeObjectFn2 = void*(*)(const void*);
+        auto method_from_name = reinterpret_cast<MethodFromNameFn>(GetProcAddress(game_module, "il2cpp_class_get_method_from_name"));
+        auto get_class_type = reinterpret_cast<ClassTypeFn2>(GetProcAddress(game_module, "il2cpp_class_get_type"));
+        auto get_type_object = reinterpret_cast<TypeObjectFn2>(GetProcAddress(game_module, "il2cpp_type_get_object"));
+        if (!method_from_name || !get_class_type || !get_type_object || !enum_class_info) return nullptr;
+        void* type = get_type_object(get_class_type(const_cast<void*>(enum_class_info)));
+        if (!type) return nullptr;
+        BE_ResolvedClassV1 system_enum{};
+        if (host->resolve_class(host->context, "mscorlib.dll", "System", "Enum", &system_enum) != BE_Result_Ok) return nullptr;
+        void* parse = method_from_name(system_enum.class_info, "Parse", 2);
+        if (!parse) return nullptr;
+        void* name_string = host->string_new(host->context, name);
+        if (!name_string) return nullptr;
+        void* args[]{type, name_string};
+        void* exception = nullptr;
+        void* boxed = host->runtime_invoke(host->context, parse, nullptr, args, &exception);
+        return exception ? nullptr : boxed;
+    };
     auto constant = [&](const char* ns, const char* cls, const char* name) {
-        const void* field = static_field(ns, cls, name);
-        if (!field) { ok = false; return -1; }
-        return Unbox<int>(host->field_get_value_object(host->context, field, nullptr), ok);
+        BE_ResolvedClassV1 resolved{};
+        if (host->resolve_class(host->context, kGame, ns, cls, &resolved) != BE_Result_Ok) {
+            ok = false;
+            Log((std::string("Missing enum class: ") + ns + "." + cls).c_str());
+            return -1;
+        }
+        const void* field = find_field(resolved.class_info, name);
+        if (!field) {
+            ok = false;
+            Log((std::string("Missing enum constant: ") + cls + "." + name).c_str());
+            return -1;
+        }
+        void* boxed = host->field_get_value_object(host->context, field, nullptr);
+        if (!boxed) {
+            boxed = enum_parse_box(resolved.class_info, name);
+            if (boxed) ++g_enum_parse_fallbacks;
+        }
+        if (!boxed) {
+            ok = false;
+            Log((std::string("Enum constant ") + cls + "." + name +
+                 ": the static field exists but its value is unreadable on this client.").c_str());
+            return -1;
+        }
+        return Unbox<int>(boxed, ok);
     };
     g_sprint = constant(kCore, "MovementComponent.GroundedMoveGait", "Sprint");
     g_dash_mode = constant(kCore, "MovementComponent.MoveMode", "Dash");
@@ -1294,39 +1411,103 @@ BE_Result BE_CALL Initialize(const BE_HostApiV1* host) {
     }
     auto other_constant = [&](const char* assembly, const char* ns, const char* cls, const char* name) {
         BE_ResolvedClassV1 resolved{};
-        if (host->resolve_class(host->context, assembly, ns, cls, &resolved) != BE_Result_Ok) { ok = false; return -1; }
+        if (host->resolve_class(host->context, assembly, ns, cls, &resolved) != BE_Result_Ok) {
+            ok = false;
+            Log((std::string("Missing enum class: ") + assembly + " " + ns + "." + cls).c_str());
+            return -1;
+        }
         auto field = find_field(resolved.class_info, name);
-        if (!field) { ok = false; return -1; }
-        return Unbox<int>(host->field_get_value_object(host->context, field, nullptr), ok);
+        if (!field) {
+            ok = false;
+            Log((std::string("Missing enum constant: ") + ns + "." + cls + "." + name).c_str());
+            return -1;
+        }
+        void* boxed = host->field_get_value_object(host->context, field, nullptr);
+        if (!boxed) {
+            boxed = enum_parse_box(resolved.class_info, name);
+            if (boxed) ++g_enum_parse_fallbacks;
+        }
+        if (!boxed) {
+            ok = false;
+            Log((std::string("Enum constant ") + ns + "." + cls + "." + name +
+                 ": the static field exists but its value is unreadable on this client.").c_str());
+            return -1;
+        }
+        return Unbox<int>(boxed, ok);
     };
     g_blend_style = other_constant(kUnity, "UnityEngine", "AnimationBlendStyle", "HermiteCubic");
     g_blend_interrupt = other_constant(kUnity, "UnityEngine", "AnimatorTransitionInterruptionSource", "CurrentThenNext");
     g_audio_none = other_constant("Audio.Beyond.dll", "Beyond.Audio", "AudioCallbackType", "None");
     g_particle_stop_clear = other_constant(kParticles, "UnityEngine", "ParticleSystemStopBehavior", "StopEmittingAndClear");
+    if (g_enum_parse_fallbacks)
+        Log((std::to_string(g_enum_parse_fallbacks) +
+             " enum constants read through the System.Enum.Parse fallback"
+             " (this client does not box enum literals).").c_str());
     using NewStringFn = void*(*)(const char*);
     auto new_string = reinterpret_cast<NewStringFn>(GetProcAddress(GetModuleHandleW(L"GameAssembly.dll"), "il2cpp_string_new"));
-    if (!new_string) return BE_Result_ContractMismatch;
+    if (!new_string) {
+        Log("il2cpp_string_new is unavailable in this client.");
+        return BE_Result_ContractMismatch;
+    }
+    const bool enums_ok = ok;
     for (size_t i = 0; i < kCharacterCount; ++i) {
         const char* event = kCharacters[i].flying_stop_event;
         if (!event) continue; // This character has no continuous audio to defer.
         void* stop_name = new_string(event);
         if (!stop_name) return BE_Result_Failed;
         void* hash_args[]{stop_name};
+        ok = true;
         g_flying_stop_hashes[i] = Unbox<uint32_t>(Invoke(AudioHash, nullptr, hash_args, ok), ok);
-        if (!ok || !g_flying_stop_hashes[i]) return BE_Result_ContractMismatch;
+        if (!ok || !g_flying_stop_hashes[i]) {
+            g_flying_stop_hashes[i] = 0;
+            // The mobile client's AudioHashGenerator contract differs from the
+            // desktop build. Deferred flying-stop audio is cosmetic and the
+            // deferral path is keyed on a non-zero hash, so degrade to a no-op
+            // (the game keeps playing its own audio) instead of failing the
+            // whole desktop contract initialization.
+            Log((std::string("Audio hash lookup failed for ") + kCharacters[i].codename +
+                 "; deferred flying-stop audio disabled on this client.").c_str());
+        }
     }
     g_hash_fields[0] = static_field(kView, kCharacterComp, "HASH_SP_DASH_L");
     g_hash_fields[1] = static_field(kView, kCharacterComp, "HASH_SP_DASH_R");
     g_locomotion_fields[0] = static_field(kView, "CharacterAnimationBlackboard", "HASH_STATE_RUN");
     g_locomotion_fields[1] = static_field(kView, "CharacterAnimationBlackboard", "HASH_STATE_SPRINT");
     uint32_t impl = 0;
-    if (!ok || !g_hash_fields[0] || !g_hash_fields[1] || !g_locomotion_fields[0] || !g_locomotion_fields[1] ||
-        (flags(g_methods[SetDashing].resolved.method_info, &impl) & 0x10u)) return BE_Result_ContractMismatch;
+    if (!enums_ok) {
+        contract_fail("A required gameplay enum constant (sprint gait / move mode / "
+            "perform state / interrupt reason) is unresolved; the mobile "
+            "client's metadata differs from the desktop contract.");
+    }
+    if (!g_hash_fields[0] || !g_hash_fields[1] || !g_locomotion_fields[0] || !g_locomotion_fields[1]) {
+        contract_fail("CharacterAnimationComponent HASH_SP_DASH_L/R or CharacterAnimationBlackboard "
+            "HASH_STATE_RUN/SPRINT static fields are unresolved.");
+    }
+    if (flags(g_methods[SetDashing].resolved.method_info, &impl) & 0x10u) {
+        contract_fail("SetDashing is static on this client; the desktop contract expects an instance method.");
+    }
     for (MethodId id : {FlowTick, PerformClear, AddCommand, TickStateInterrupt, CrossFade, TryExit,
         CheckTrackEnd, ShowObject, AudioMonoPost, AudioMonoComponent, EffectDuration, EffectFinish, EffectStop})
-        if (flags(g_methods[id].resolved.method_info, &impl) & 0x10u) return BE_Result_ContractMismatch;
+        if (flags(g_methods[id].resolved.method_info, &impl) & 0x10u) {
+            contract_fail((std::string("Static/instance contract mismatch: ") + g_methods[id].desc.class_name +
+                 "." + g_methods[id].desc.method_name + " is static, expected instance.").c_str());
+        }
     for (MethodId id : {AudioEntityPost, AudioHash, UnityAlive})
-        if (!(flags(g_methods[id].resolved.method_info, &impl) & 0x10u)) return BE_Result_ContractMismatch;
+        if (!(flags(g_methods[id].resolved.method_info, &impl) & 0x10u)) {
+            contract_fail((std::string("Static/instance contract mismatch: ") + g_methods[id].desc.class_name +
+                 "." + g_methods[id].desc.method_name + " is an instance method, expected static.").c_str());
+        }
+    if (!contract_failures.empty()) {
+        Log("Desktop contract verification failed on this client:");
+        size_t start = 0;
+        while (start < contract_failures.size()) {
+            size_t end = contract_failures.find('\n', start);
+            if (end == std::string::npos) end = contract_failures.size();
+            Log(contract_failures.substr(start, end - start).c_str());
+            start = end + 1;
+        }
+        return BE_Result_ContractMismatch;
+    }
     auto game_module = GetModuleHandleW(L"GameAssembly.dll");
     g_object_class = reinterpret_cast<ObjectClassFn>(GetProcAddress(game_module, "il2cpp_object_get_class"));
     g_class_method = reinterpret_cast<ClassMethodFn>(GetProcAddress(game_module, "il2cpp_class_get_method_from_name"));
@@ -1336,9 +1517,15 @@ BE_Result BE_CALL Initialize(const BE_HostApiV1* host) {
     auto class_type = reinterpret_cast<ClassTypeFn>(GetProcAddress(game_module, "il2cpp_class_get_type"));
     auto type_object = reinterpret_cast<TypeObjectFn>(GetProcAddress(game_module, "il2cpp_type_get_object"));
     BE_ResolvedClassV1 particle_class{};
-    if (!g_object_class || !g_class_method || !g_class_parent || !class_type || !type_object ||
-        host->resolve_class(host->context, kParticles, "UnityEngine", "ParticleSystem", &particle_class) != BE_Result_Ok)
+    if (!g_object_class || !g_class_method || !g_class_parent || !class_type || !type_object) {
+        Log("One of the il2cpp reflection helpers (object_get_class / class_get_method_from_name / "
+            "class_get_parent / class_get_type / type_get_object) is unavailable.");
         return BE_Result_ContractMismatch;
+    }
+    if (host->resolve_class(host->context, kParticles, "UnityEngine", "ParticleSystem", &particle_class) != BE_Result_Ok) {
+        Log("UnityEngine.ParticleSystem is not resolvable in this client (assembly stripped or renamed).");
+        return BE_Result_ContractMismatch;
+    }
     g_particle_type = type_object(class_type(const_cast<void*>(particle_class.class_info)));
     if (!g_particle_type) return BE_Result_ContractMismatch;
     g_particle_type_root = host->gchandle_new(host->context, g_particle_type, 1);

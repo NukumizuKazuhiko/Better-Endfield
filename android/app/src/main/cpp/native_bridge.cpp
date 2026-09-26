@@ -11,6 +11,7 @@
 #include "android_virtual_keys.h"
 
 #include <jni.h>
+#include <dlfcn.h>
 
 #include <atomic>
 #include <chrono>
@@ -27,6 +28,11 @@
 extern "C" const BE_ModuleApiV1* BetterEndfield_GetUiModuleApiV1();
 extern "C" const BE_ModuleApiV1* BetterEndfield_GetCameraModuleApiV1();
 extern "C" const BE_ModuleApiV1* BetterEndfield_GetActionsModuleApiV1();
+
+namespace betterendfield {
+// Defined in input_relay.cpp; serves the panel's key presses through a file.
+void StartInputRelay();
+}  // namespace betterendfield
 
 namespace betterendfield {
 namespace {
@@ -133,15 +139,42 @@ bool AnyModuleRequested() {
 }  // namespace betterendfield
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM*, void*) {
+    // The Java side may load a second copy of this library under the module
+    // classloader when JNI resolution against the game-classloader copy
+    // fails. That copy only serves JNI symbols; the module runtime already
+    // runs in the first copy, and a second one would double-install hooks.
+    const char* guard = std::getenv("BETTER_ENDFIELD_RUNTIME_STARTED");
+    if (guard != nullptr && std::string(guard) == "1") {
+        betterendfield::LogInfo(
+            "runtime", "secondary library copy; runtime already started elsewhere");
+        return JNI_VERSION_1_6;
+    }
     if (!betterendfield::AnyModuleRequested()) {
         betterendfield::LogInfo(
             "runtime", "no Android modules selected; IL2CPP worker not started");
         return JNI_VERSION_1_6;
     }
     if (!betterendfield::g_runtime_started.exchange(true, std::memory_order_acq_rel)) {
+        // The static above is per library copy, and Android gives every
+        // classloader its own copy. The environment variable is process-wide,
+        // so setting it here is what actually stops a second copy from
+        // starting a second runtime (and double-installing every hook).
+        setenv("BETTER_ENDFIELD_RUNTIME_STARTED", "1", 1);
+        // The panel presses keys through a file relay (see input_relay.cpp):
+        // JNI resolution is classloader-scoped and the panel's classes live in
+        // the LSPosed module classloader, one classloader away from this copy.
+        betterendfield::StartInputRelay();
         std::thread(betterendfield::RunModules).detach();
     }
     return JNI_VERSION_1_6;
+}
+
+// Diagnostics: reports whether libil2cpp.so is visible from the calling
+// library copy's linker namespace (RTLD_NOLOAD — never loads a second copy).
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_betterendfield_android_NativeCommandBridge_probeIl2Cpp(JNIEnv*, jclass) {
+    void* image = dlopen("libil2cpp.so", RTLD_NOLOAD | RTLD_NOW);
+    return image != nullptr ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

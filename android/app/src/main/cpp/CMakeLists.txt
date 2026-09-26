@@ -82,6 +82,7 @@ set_target_properties(betterendfield_desktop_features
 
 add_library(betterendfield_android SHARED
     native_bridge.cpp
+    input_relay.cpp
     core/hook_broker.cpp
     core/log.cpp
     core/runtime.cpp

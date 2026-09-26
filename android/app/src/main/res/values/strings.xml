@@ -21,6 +21,8 @@
     <string name="diagnostics_model">模型配置：%1$s</string>
     <string name="diagnostics_mesh">Mesh 字段：只读动态扫描；候选写入关闭</string>
     <string name="diagnostics_ready">诊断页已加载</string>
+    <string name="diagnostics_runtime">运行时日志（游戏进程内实际执行轨迹）：</string>
+    <string name="diagnostics_runtime_empty">运行时日志为空——可能原因：模块未在 LSPosed 中激活/勾选目标游戏、游戏重启后仍是旧进程、或 LSPosed 服务未连接。请确认 LSPosed 作用域后重启游戏再进本页查看。</string>
     <string name="enhancement_eyebrow">ENHANCEMENTS</string>
     <string name="enhancement_title">界面与画面增强</string>
     <string name="state_on">开</string>

@@ -616,7 +616,9 @@ bool GameWindowHasFocus() {
     return process_id == GetCurrentProcessId();
 }
 
+#if defined(_WIN32)
 LRESULT CALLBACK FreeCameraMouseHook(int code, WPARAM message, LPARAM data);
+#endif
 
 struct HotkeyRequest {
     std::atomic_int* key;
@@ -632,7 +634,10 @@ void InputThreadMain() {
         {&g_keyframe_clear_key, &g_keyframe_clear_request},
         {&g_vmd_play_key, &g_vmd_play_request},
     };
+#if defined(_WIN32)
+    // The mouse hook has no Android representation; see the input loop below.
     HHOOK mouse_hook = nullptr;
+#endif
     bool toggle_was_down = false;
     bool pause_was_down = false;
     bool first_person_was_down = false;
@@ -674,6 +679,7 @@ void InputThreadMain() {
             binding.was_down = down;
         }
 
+#if defined(_WIN32)
         // The low-level mouse hook only exists while the free camera runs in the
         // focused game window; its callbacks arrive through this thread's queue.
         const bool capture = focused && free_enabled &&
@@ -687,17 +693,31 @@ void InputThreadMain() {
             UnhookWindowsHookEx(mouse_hook);
             mouse_hook = nullptr;
         }
+        // The hook belongs to this thread, so its callbacks are delivered through
+        // this queue and pumping it is what makes mouse look work. The 5 ms
+        // timeout doubles as the loop's throttle.
         MsgWaitForMultipleObjects(0, nullptr, FALSE, 5, QS_ALLINPUT);
         MSG message{};
         while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
+#else
+        // There is no mouse to capture here. The in-game panel presses virtual
+        // keys, which the latch above already polls, and nothing accumulates into
+        // the mouse deltas, so mouse look contributes nothing to the free camera
+        // and the rest of the controls are unchanged. The sleep keeps the
+        // throttle that the message wait provided on Windows; without it this
+        // thread would spin.
+        Sleep(5);
+#endif
     }
     g_mouse_capture.store(false, std::memory_order_relaxed);
+#if defined(_WIN32)
     if (mouse_hook) {
         UnhookWindowsHookEx(mouse_hook);
     }
+#endif
 }
 
 void ReleaseCameraRoot() {
