@@ -83,13 +83,6 @@ struct FpEngine {
     void(*set_shadow)(void*,void*)=nullptr;
     bool(*get_offscreen)(void*)=nullptr;
     void(*set_offscreen)(void*,bool)=nullptr;
-    // Shadow-casting mode lives under the _Injected icall name or the plain
-    // native name depending on the Unity version. These are soft bindings:
-    // a miss only disables the shadow-only fallback below.
-    void(*get_shadow_mode_injected)(void*,int32_t*)=nullptr;
-    int32_t(*get_shadow_mode_plain)(void*)=nullptr;
-    void(*set_shadow_mode_injected)(void*,int32_t*)=nullptr;
-    void(*set_shadow_mode_plain)(void*,int32_t)=nullptr;
     size_t(*array_length)(void*)=nullptr;
     uint32_t(*array_bytes)(void*)=nullptr;
     size_t(*array_header)()=nullptr;
@@ -172,14 +165,6 @@ struct FpEngine {
         FP_BIND(get_offscreen,"UnityEngine.SkinnedMeshRenderer::get_updateWhenOffscreen");
         FP_BIND(set_offscreen,"UnityEngine.SkinnedMeshRenderer::set_updateWhenOffscreen");
 #undef FP_BIND
-        get_shadow_mode_injected=reinterpret_cast<decltype(get_shadow_mode_injected)>(
-            FpValue<void*>(nullptr,resolve,"UnityEngine.Renderer::get_shadowCastingMode_Injected"));
-        set_shadow_mode_injected=reinterpret_cast<decltype(set_shadow_mode_injected)>(
-            FpValue<void*>(nullptr,resolve,"UnityEngine.Renderer::set_shadowCastingMode_Injected"));
-        get_shadow_mode_plain=reinterpret_cast<decltype(get_shadow_mode_plain)>(
-            FpValue<void*>(nullptr,resolve,"UnityEngine.Renderer::get_shadowCastingMode"));
-        set_shadow_mode_plain=reinterpret_cast<decltype(set_shadow_mode_plain)>(
-            FpValue<void*>(nullptr,resolve,"UnityEngine.Renderer::set_shadowCastingMode"));
         ready=ok;
         Log(std::string("First person mesh: named GPU readback/clone bindings ")+(ready?"ready.":"unavailable."));
         return ready;
@@ -336,21 +321,20 @@ struct FpShadowHide { FpRoot renderer; int original_mode=-1; };
 std::vector<FpShadowHide> g_fp_shadow_hides;
 
 int FpGetShadowMode(void* renderer) {
-    auto& e=g_fp_engine;
-    if(!renderer)return -1;
-    if(e.get_shadow_mode_injected) {
-        int32_t mode=-1;
-        if(!FpCall(e.get_shadow_mode_injected,renderer,&mode))return -1;
-        return mode;
-    }
-    return FpValue<int32_t>(-1,e.get_shadow_mode_plain,renderer);
+    // Resolved through the metadata contract system like every other managed
+    // call in this module: the raw icall table is partial on Android (the GPU
+    // patch engine proved that), while runtime_invoke contracts all resolve.
+    const MethodContract* get=Contract("unity.renderer.shadow_casting_mode.get");
+    if(!get||!get->resolved)return -1;
+    int mode=-1;
+    return GetValue(get,renderer,mode)?mode:-1;
 }
 bool FpSetShadowMode(void* renderer,int mode) {
-    auto& e=g_fp_engine;
-    int32_t value=mode;
-    if(e.set_shadow_mode_injected)return FpCall(e.set_shadow_mode_injected,renderer,&value);
-    if(e.set_shadow_mode_plain)return FpCall(e.set_shadow_mode_plain,renderer,value);
-    return false;
+    const MethodContract* set=Contract("unity.renderer.shadow_casting_mode.set");
+    if(!set||!set->resolved)return false;
+    int value=mode;
+    void* parameters[1]{&value};
+    return InvokeVoid(set,renderer,parameters);
 }
 void FpApplyShadowHide(const HeadPartProbe& part) {
     if(!part.renderer)return;
@@ -465,11 +449,13 @@ bool FpBuildPatch(const HeadPartProbe& part,FpPatch& patch,bool fill,float range
     return true;
 }
 void EnsureNeckCap() {
-    if(!g_first_person_hide_head.load()||!g_first_person.head||!g_fp_engine.Init())return;
+    // The mesh-patch engine depends on icalls that do not all exist on every
+    // platform (Android's icall table is partial). When it fails to init the
+    // shadow-only fallback below still covers every matched part by itself,
+    // so Init failure must not leave this function.
+    if(!g_first_person_hide_head.load()||!g_first_person.head)return;
     auto& state=g_fp_mesh_session;auto& e=g_fp_engine;
-    // Without GPU readback the mesh patch is unavailable entirely; the
-    // shadow-only fallback below then covers every matched part by itself.
-    const bool readback=FpValue<bool>(false,e.supports_readback);
+    const bool readback=g_fp_engine.Init()&&FpValue<bool>(false,e.supports_readback);
     const bool fill=g_first_person_fill_neck_hole.load();const float range=g_first_person_neck_plug_scale.load();
     if(state.scanned&&(fill!=state.fill||range!=state.range))ReleaseNeckCap();
     if(state.scanned&&g_first_person_pump_frames-state.last_scan<30)return;

@@ -349,6 +349,14 @@ MethodContract g_contracts[]{
     {"unity.skinned_mesh_renderer.bones.get",
         {"UnityEngine.CoreModule.dll", "UnityEngine", "SkinnedMeshRenderer",
             "get_bones", nullptr, "UnityEngine.Transform[]", 0}},
+    {"unity.renderer.shadow_casting_mode.get",
+        {"UnityEngine.CoreModule.dll", "UnityEngine", "Renderer",
+            "get_shadowCastingMode", nullptr,
+            "UnityEngine.Rendering.ShadowCastingMode", 0}},
+    {"unity.renderer.shadow_casting_mode.set",
+        {"UnityEngine.CoreModule.dll", "UnityEngine", "Renderer",
+            "set_shadowCastingMode", "UnityEngine.Rendering.ShadowCastingMode",
+            "System.Void", 1}},
     {"unity.transform.parent.get",
         {"UnityEngine.CoreModule.dll", "UnityEngine", "Transform", "get_parent",
             nullptr, "UnityEngine.Transform", 0}},
@@ -1813,6 +1821,10 @@ bool ResolveContracts() {
         (photo_mode_exit_ready ? "ready" : "unavailable") +
         ", head_part_probe=" + (head_part_probe_ready ? "ready" : "unavailable") +
         ", neck_cap=" + (neck_cap_ready ? "ready" : "unavailable") +
+        ", shadow_mode=" +
+        ((ready("unity.renderer.shadow_casting_mode.get") &&
+            ready("unity.renderer.shadow_casting_mode.set"))
+            ? "ready" : "unavailable") +
         ", humanoid_head_bone=" +
         ((ready("unity.animator.get_bone_transform") &&
             ready("unity.game_object.get_component") &&
