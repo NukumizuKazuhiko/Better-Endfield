@@ -161,6 +161,11 @@ else is on the settings screen.
 | Time freeze | `8` | switch on the page, button on the panel |
 | First person | `-` | switch on the page, button on the panel |
 | Free-camera movement | arrows, PageUp/PageDown | press-and-hold pad on the panel |
+| Camera roll / FOV in-out / view reset | `Numpad7`, `Numpad9`, `Numpad1`, `Numpad3`, `Numpad5` | buttons on the panel |
+| Motion preset play/stop | `Numpad8` | button on the panel |
+| Keyframe record/play/clear | `Numpad0`, `Numpad2`, `Numpad4` | buttons on the panel |
+| VMD replay | `Numpad6` | pinned in the configuration, no panel button |
+| Runtime journal | none | read-only list on the panel, plus "save log to file" |
 | Movement speed, both FOVs, head/neck options | ini values | sliders and switches on the page |
 | Sustained special dash | none | Enhancements page only |
 
@@ -178,6 +183,45 @@ shipped is gone: its two switches (hide UID, disable dither) are now served by
 the shared desktop sources, and keeping both would have installed two hooks on
 `GameObject.SetActive` from two different brokers. The old preference keys are
 read once on upgrade so the user's choice carries over.
+
+### Panel input relay and runtime journal (3.3.20)
+
+The panel no longer reaches the native runtime over JNI. `Runtime.nativeLoad`
+registers the module library under the game's classloader, while the panel's
+bridge classes belong to the LSPosed module classloader, and Android refuses to
+open the same `.so` path twice under different classloaders - so unresolved JNI
+symbols made the Java side load a second copy of the library, which would have
+installed every hook twice. That copy now returns early behind the
+`BETTER_ENDFIELD_RUNTIME_STARTED` environment guard and serves JNI symbols only.
+Key presses, runtime commands and status travel as plain lines in files under
+the game's own files directory instead, polled by `input_relay.cpp` (10 ms for
+input, 500 ms for status) and fed into the same virtual-key latch the ported
+modules already poll. The status file is rewritten only when the command status
+changes, and a shrinking file restarts the read offset, which is how a fresh
+session truncates the stream.
+
+The same process now journals its own load pipeline. `RuntimeLog` keeps a
+150-line ring buffer and mirrors it into the remote preference `runtime_log`;
+the panel displays it in-process, so a broken transport cannot lose it, and the
+diagnostics page reads the same store. If the journal section is missing from
+the panel entirely, the game is still running an older module build.
+"保存日志到文件" writes the journal through `ACTION_CREATE_DOCUMENT` (no storage
+permission) and falls back to an `ACTION_SEND` plain-text share; the result is
+routed back through hooked `Activity.onActivityResult` relays, because overlay
+code never receives it directly.
+
+Two silent failures in the ported modules were closed as well. Enum constants
+are read through `System.Enum.Parse` instead of the boxing path that some
+clients refuse, and static fields are read with `il2cpp_field_static_get_value`
+and judged per read, since a shared success flag used to veto values that had in
+fact been recovered. First-person hiding gained a second path for parts the GPU
+mesh patch cannot reach (non-skinned renderers, or exhausted patch attempts):
+they switch to `ShadowCastingMode.ShadowsOnly` - nothing drawn in cameras,
+shadows kept - read and written through the
+`unity.renderer.shadow_casting_mode.get` / `.set` contracts, because Android's
+raw icall table is partial. A failed mesh-patch `Init()` no longer returns
+early, so the fallback covers every matched part, and the part tree is logged
+once per session to diagnose renderer names the tokens miss.
 
 ### Sustained dash bone-pose banks
 
@@ -294,8 +338,10 @@ Research catalogs and source PCK/CHK files stay under ignored
   Japanese package.
 - Rule changes require force-stopping and restarting the game.
 - The in-game panel's controls are wired: hide-HUD, free camera, time freeze,
-  first person and the free-camera movement pad all press the virtual keys the
-  ported desktop modules poll. BEM hot switching is still not connected.
+  first person, the free-camera movement pad and the roll / FOV / view-reset /
+  motion-preset / keyframe group all press the virtual keys the ported desktop
+  modules poll; VMD replay is pinned in the configuration but has no panel
+  button. BEM hot switching is still not connected.
 - The three ported modules are build-verified for ARM64 and their settings and
   panel were exercised on a local emulator. The emulator has no LSPosed, so
   their in-game behaviour has not been run against the injected client; the
@@ -322,8 +368,8 @@ Research catalogs and source PCK/CHK files stay under ignored
 
 ## Requirements
 
-- JDK 17 or newer
-- Android SDK platform 35 and build-tools 35.0.0
+- JDK 21 (the version CI pins)
+- Android SDK platform 37 (`platforms;android-37.0`, matching `compileSdk = 37`) and build-tools 36.0.0
 - Android NDK 27.2.12479018
 - CMake 3.22.1
 
@@ -336,6 +382,16 @@ network access from the repository root:
 
 The APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
 
+The `android-apk` workflow (`.github/workflows/android-build.yml`) builds that
+debug APK on GitHub Actions for every push to `main` or the fix branch and every
+pull request touching `android/**`, `native/**` or the workflow itself, and
+uploads it as the `better-endfield-debug-apk` artifact. It pins JDK 21,
+`platforms;android-37.0`, `build-tools;36.0.0`, NDK `27.2.12479018` and CMake
+`3.22.1`, then fetches the Dobby v1.0.5 source into the gitignored
+`tools/android-toolchain/dobby-1.0.5` and drops its `example/` subdirectory,
+which needs the `DobbyInstrument` / `DobbySymbolResolver` entry points Better
+Endfield disables.
+
 Version 3.3.0 dropped the legacy API 82 build variant. libxposed API 102 is the
 only framework entry point, so there are no longer two flavors and `minSdk` is
 29, the version that service requires.
@@ -346,8 +402,14 @@ entry is separate from login-model settings. The enhancement page owns the
 overlay switch and preview; the BEM page only manages packages. The framework
 entry attaches a collapsed BE icon directly to the scoped Unity application's
 Activity. Tapping it expands the panel, dragging repositions it, and the panel
-follows pause/resume/destroy. It does not require
-SYSTEM_ALERT_WINDOW permission or a foreground service. After first enabling
+survives pause/resume/destroy: game SDKs can re-call `setContentView`, which
+either strips our host from the content view or leaves it attached but buried
+under the freshly added game view, so the panel re-attaches the host to the
+current content view and raises it when the z-order is the only thing wrong,
+re-checking once shortly after `onActivityResumed`. It does not require
+SYSTEM_ALERT_WINDOW permission or a foreground service. The panel footer
+renders this process's runtime journal in place, with a "save log to file"
+button that writes through the system file picker. After first enabling
 the option, restart the scoped game. Panel display in an injected game still
 requires device verification; an ordinary emulator can verify the preview.
 

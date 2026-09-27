@@ -4,7 +4,7 @@
 
 Better Endfield is a modular modding runtime for *Arknights: Endfield*. Features such as custom character appearances (BEM), title screen models & choreography, per-character voice language routing, OmniMix dynamic music replacement, real-time combat stats & rDPS metering, display enhancement (OptiScaler DLSS/FSR/XeSS) and mobile touch HUD emulation are provided as decoupled native DLL modules. The core Host handles dynamic IL2CPP runtime symbol resolution, Hook lifecycle management, configuration persistence, and module discovery.
 
-The Windows desktop build and the Android/LSPosed build share one set of module sources. As of 3.3.0, custom character appearances use the same standard BEM package on both platforms.
+The Windows desktop build and the Android/LSPosed build share one set of module sources. As of 3.3.0, custom character appearances use the same standard BEM package on both platforms. See [Android (LSPosed)](#android-lsposed) for the attach model, the in-game control panel and the diagnostics channel.
 
 ---
 
@@ -131,6 +131,26 @@ For the authoring workflow, conversion automation boundaries and the full field 
 
 ---
 
+## Android (LSPosed)
+
+The Android build compiles the same module sources (`android/`) and attaches to the game process through LSPosed. The companion app provides the model, third-party model, voice, display-enhancement and diagnostics pages, and the game hosts a floating control panel; package management and mobile texture conversion are covered in [Custom Character Appearances](#custom-character-appearances-bem) above.
+
+The module attaches to whichever app is selected in the LSPosed scope (main process only), and decides whether to act on evidence: `UnityPlayer.nativeRender` must exist, and every native hook resolves by name from `libil2cpp.so` exports, so the official, international and channel builds share one APK. Three platform differences are handled explicitly: the JNI bridge self-heals a classloader mismatch, and a second copy of the module library only serves JNI symbols instead of installing hooks twice; enum constants go through `System.Enum.Parse` managed reflection rather than the boxing path that fails on some clients; static fields are read straight from their storage, and each value is judged on its own so a shared success flag cannot veto a healthy read.
+
+The in-game panel turns the desktop hotkeys into tappable buttons: hide/restore HUD, free camera, world pause, first person, plus the movement pad and a roll/keyframe group under free camera (motion play/stop, view reset, FOV in/out, roll, keyframe record/play/clear). Key presses do not travel over JNI: the module library is loaded by the game's classloader while the panel's bridge classes belong to the LSPosed module classloader, and Android forbids opening the same `.so` path twice under different classloaders. Keys, runtime commands and status therefore go through plain files in the game's own directory, polled natively.
+
+The bottom of the panel shows the current process's runtime log (a 150-line ring buffer) and offers "save log to file": a system file picker writes to a location the user chooses, no storage permission required, degrading to a text share when no picker is available. The companion app's diagnostics page reads the same log. If the runtime-log section is missing from the panel entirely, the game is still running an older module build - re-toggle the module in LSPosed or reboot the game.
+
+Free-camera extensions default to no mouse-look hook on mobile (there is no cursor to hook), and the camera configuration uses `schema_version=3` with explicit key names, pinning the panel buttons to the codes the desktop module polls.
+
+First-person part hiding has two paths: parts the GPU mesh patch can handle are unchanged; parts it cannot reach (non-skinned renderers, or patch attempts exhausted) switch to a shadow-casting-only renderer mode - nothing drawn in cameras, shadows kept. That property is read and written through the metadata contract system because Android's engine icall table is only partially implemented; a failed mesh-patch init no longer blocks this fallback either. The game can reset renderer state on part or LOD rebuilds, so the module re-asserts it.
+
+The Android version is currently 3.3.20 (versionCode 30320) while desktop remains 3.3.0; the two version numbers are not yet unified.
+
+For platform internals, contract evidence and the desktop-hotkey-to-panel-button mapping see [`android/README.md`](android/README.md).
+
+---
+
 ## Building from Source
 
 ### Prerequisites
@@ -151,6 +171,8 @@ dotnet build ui/BetterEndfield.UI/BetterEndfield.UI.csproj -c Release
 # 3. Package the full distribution
 .\scripts\BuildBetterEndfield.ps1
 ```
+
+Android debug APKs are built by `.github/workflows/android-build.yml` on GitHub Actions for pushes and pull requests, uploaded as the `better-endfield-debug-apk` artifact. The environment is JDK 21, `platforms;android-37.0`, build-tools 36.0.0, NDK 27.2.12479018 and CMake 3.22.1; the Dobby v1.0.5 source is fetched before the build (that dependency is not committed) with its `example/` subdirectory removed, since it needs `DobbyInstrument` / `DobbySymbolResolver`, which Better Endfield disables.
 
 ---
 
