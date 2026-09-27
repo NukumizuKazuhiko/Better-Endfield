@@ -83,6 +83,13 @@ struct FpEngine {
     void(*set_shadow)(void*,void*)=nullptr;
     bool(*get_offscreen)(void*)=nullptr;
     void(*set_offscreen)(void*,bool)=nullptr;
+    // Shadow-casting mode lives under the _Injected icall name or the plain
+    // native name depending on the Unity version. These are soft bindings:
+    // a miss only disables the shadow-only fallback below.
+    void(*get_shadow_mode_injected)(void*,int32_t*)=nullptr;
+    int32_t(*get_shadow_mode_plain)(void*)=nullptr;
+    void(*set_shadow_mode_injected)(void*,int32_t*)=nullptr;
+    void(*set_shadow_mode_plain)(void*,int32_t)=nullptr;
     size_t(*array_length)(void*)=nullptr;
     uint32_t(*array_bytes)(void*)=nullptr;
     size_t(*array_header)()=nullptr;
@@ -165,6 +172,14 @@ struct FpEngine {
         FP_BIND(get_offscreen,"UnityEngine.SkinnedMeshRenderer::get_updateWhenOffscreen");
         FP_BIND(set_offscreen,"UnityEngine.SkinnedMeshRenderer::set_updateWhenOffscreen");
 #undef FP_BIND
+        get_shadow_mode_injected=reinterpret_cast<decltype(get_shadow_mode_injected)>(
+            FpValue<void*>(nullptr,resolve,"UnityEngine.Renderer::get_shadowCastingMode_Injected"));
+        set_shadow_mode_injected=reinterpret_cast<decltype(set_shadow_mode_injected)>(
+            FpValue<void*>(nullptr,resolve,"UnityEngine.Renderer::set_shadowCastingMode_Injected"));
+        get_shadow_mode_plain=reinterpret_cast<decltype(get_shadow_mode_plain)>(
+            FpValue<void*>(nullptr,resolve,"UnityEngine.Renderer::get_shadowCastingMode"));
+        set_shadow_mode_plain=reinterpret_cast<decltype(set_shadow_mode_plain)>(
+            FpValue<void*>(nullptr,resolve,"UnityEngine.Renderer::set_shadowCastingMode"));
         ready=ok;
         Log(std::string("First person mesh: named GPU readback/clone bindings ")+(ready?"ready.":"unavailable."));
         return ready;
@@ -306,9 +321,56 @@ struct FpMeshSession {
     BetterEndfield::FirstPerson::RetryBudget attempts;
     uint64_t last_scan=0;
     bool scanned=false,fill=false;
+    bool tree_logged=false;
     float range=1;
 };
 FpMeshSession g_fp_mesh_session;
+
+// ShadowCastingMode.ShadowsOnly: the renderer draws nothing in cameras but
+// keeps casting shadows. This is the renderer-level equivalent of what the
+// mesh patch does for matched head parts (triangles removed, shadow proxy
+// kept), used wherever the mesh patch cannot reach: non-skinned renderers
+// and skinned ones whose patch attempts are exhausted.
+constexpr int kShadowCastingShadowsOnly=3;
+struct FpShadowHide { FpRoot renderer; int original_mode=-1; };
+std::vector<FpShadowHide> g_fp_shadow_hides;
+
+int FpGetShadowMode(void* renderer) {
+    auto& e=g_fp_engine;
+    if(!renderer)return -1;
+    if(e.get_shadow_mode_injected) {
+        int32_t mode=-1;
+        if(!FpCall(e.get_shadow_mode_injected,renderer,&mode))return -1;
+        return mode;
+    }
+    return FpValue<int32_t>(-1,e.get_shadow_mode_plain,renderer);
+}
+bool FpSetShadowMode(void* renderer,int mode) {
+    auto& e=g_fp_engine;
+    int32_t value=mode;
+    if(e.set_shadow_mode_injected)return FpCall(e.set_shadow_mode_injected,renderer,&value);
+    if(e.set_shadow_mode_plain)return FpCall(e.set_shadow_mode_plain,renderer,value);
+    return false;
+}
+void FpApplyShadowHide(const HeadPartProbe& part) {
+    if(!part.renderer)return;
+    for(const auto& hide:g_fp_shadow_hides)if(hide.renderer.object==part.renderer) {
+        // The game can reset renderer state on part or LOD rebuilds; assert again.
+        FpSetShadowMode(part.renderer,kShadowCastingShadowsOnly);
+        return;
+    }
+    const int original=FpGetShadowMode(part.renderer);
+    if(original<0||original==kShadowCastingShadowsOnly)return;
+    if(!FpSetShadowMode(part.renderer,kShadowCastingShadowsOnly))return;
+    g_fp_shadow_hides.push_back(FpShadowHide{FpRoot(part.renderer),original});
+    Log("First person mesh: "+part.object_name+" set to shadow-only rendering (mesh patch unavailable; shadow retained).");
+}
+void FpReleaseShadowHides() {
+    for(auto& hide:g_fp_shadow_hides)
+        if(IsObjectAlive(hide.renderer.object)&&hide.original_mode>=0)
+            FpSetShadowMode(hide.renderer.object,hide.original_mode);
+    g_fp_shadow_hides.clear();
+}
 
 void FpDestroy(void* mesh) {if(mesh&&IsObjectAlive(mesh)){void* p[]={mesh};InvokeVoid(Contract("unity.object.destroy"),nullptr,p);}}
 bool FpRestore(FpPatch& patch) {
@@ -329,6 +391,7 @@ bool FpRestore(FpPatch& patch) {
     FpDestroy(patch.copy.object);patch.copy.Reset();return true;
 }
 void ReleaseNeckCap() {
+    FpReleaseShadowHides();
     std::vector<FpPatch> retained;
     for(auto& patch:g_fp_mesh_session.patches)if(!FpRestore(patch))retained.push_back(std::move(patch));
     g_fp_mesh_session.patches=std::move(retained);g_fp_mesh_session.attempts.Clear();g_fp_mesh_session.scanned=false;
@@ -404,7 +467,9 @@ bool FpBuildPatch(const HeadPartProbe& part,FpPatch& patch,bool fill,float range
 void EnsureNeckCap() {
     if(!g_first_person_hide_head.load()||!g_first_person.head||!g_fp_engine.Init())return;
     auto& state=g_fp_mesh_session;auto& e=g_fp_engine;
-    if(!FpValue<bool>(false,e.supports_readback))return;
+    // Without GPU readback the mesh patch is unavailable entirely; the
+    // shadow-only fallback below then covers every matched part by itself.
+    const bool readback=FpValue<bool>(false,e.supports_readback);
     const bool fill=g_first_person_fill_neck_hole.load();const float range=g_first_person_neck_plug_scale.load();
     if(state.scanned&&(fill!=state.fill||range!=state.range))ReleaseNeckCap();
     if(state.scanned&&g_first_person_pump_frames-state.last_scan<30)return;
@@ -421,14 +486,19 @@ void EnsureNeckCap() {
         } else ++it;
     }
     auto model=FindModelTransform();if(!model)return;
-    std::vector<HeadPartProbe> parts;std::string tree;int visited=0,logged=kMaxPartLogEntries;
+    std::vector<HeadPartProbe> parts;std::string tree;int visited=0;
+    // Log the part tree once per session: it names every renderer and mesh in
+    // the model, which is how a head part that tokens miss gets diagnosed.
+    int logged=state.tree_logged?kMaxPartLogEntries:0;
+    state.tree_logged=true;
     ScanPartNodes(model,0,visited,parts,tree,logged);
+    if(!tree.empty())Log("First person part tree:"+tree);
     state.attempts.Prune([&](void* renderer) {
         return std::any_of(parts.begin(),parts.end(),[&](const auto& part) {
             return part.renderer==renderer;
         });
     });
-    for(const auto& part:parts) {
+    if(readback) for(const auto& part:parts) {
         if(!part.renderer||part.vertex_count<=0)continue;
         if(std::any_of(state.patches.begin(),state.patches.end(),[&](const auto& p){return p.renderer.object==part.renderer;}))continue;
         auto source=FpValue<void*>(nullptr,e.get_mesh,part.renderer);if(!source)continue;
@@ -444,6 +514,20 @@ void EnsureNeckCap() {
         // Process one renderer per frame to avoid capturing every LOD at once.
         state.last_scan=g_first_person_pump_frames-30;
         break;
+    }
+    // Matched parts the mesh patch cannot process fall back to shadow-only
+    // rendering: not drawn in cameras, shadows kept, no mesh assumptions.
+    // Skinned parts still owned by the patch pipeline (source readable,
+    // retries left) are left alone; everything else matched is covered.
+    for(const auto& part:parts) {
+        if(!part.renderer||!part.matched)continue;
+        if(std::any_of(state.patches.begin(),state.patches.end(),
+            [&](const auto& p){return p.renderer.object==part.renderer;}))continue;
+        if(readback&&part.skinned&&part.vertex_count>0) {
+            auto source=FpValue<void*>(nullptr,e.get_mesh,part.renderer);
+            if(source&&!state.attempts.Exhausted(part.renderer))continue;
+        }
+        FpApplyShadowHide(part);
     }
 }
 bool ApplyHeadPartHide() {g_first_person.head_hide_applied=true;return true;}

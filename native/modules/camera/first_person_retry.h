@@ -21,6 +21,13 @@ public:
     void Forget(void* renderer) { entries.erase(renderer); }
     void Clear() { entries.clear(); }
 
+    // True when the patch pipeline has given up on this renderer: its only
+    // remaining treatment is the shadow-only fallback.
+    bool Exhausted(void* renderer) const {
+        auto it = entries.find(renderer);
+        return it != entries.end() && it->second.count >= 2;
+    }
+
     template<class IsPresent>
     void Prune(IsPresent present) {
         for (auto it = entries.begin(); it != entries.end();) {

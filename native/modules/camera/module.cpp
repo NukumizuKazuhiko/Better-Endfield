@@ -242,6 +242,7 @@ CameraStateLayout g_state_layout;
 BE_ResolvedClassV1 g_snapshot_controller_class{};
 BE_ResolvedClassV1 g_animator_class{};
 BE_ResolvedClassV1 g_skinned_mesh_renderer_class{};
+BE_ResolvedClassV1 g_mesh_renderer_class{};
 
 // Renderer pointers inside a probe are only valid during the scan that produced
 // them. Bound mesh patches keep GC handles separately because the game can
@@ -919,6 +920,12 @@ void* FindSnapshotCameraController() {
 // and re-applies it whenever parts or LOD levels change. Driving the feature by
 // part names instead of mesh buffers keeps it free of vertex, index and field
 // layout assumptions, so it keeps working across game updates.
+//
+// Matched parts the mesh patch cannot process fall back to shadow-only
+// rendering (Renderer.shadowCastingMode = ShadowsOnly): not drawn in cameras,
+// shadows kept, no mesh assumptions. This covers plain MeshRenderers, skinned
+// renderers whose patch attempts are exhausted, and builds without GPU
+// readback. The original shadow-casting mode is restored on exit.
 // ---------------------------------------------------------------------------
 
 constexpr const char* kHeadPartTokens[]{
@@ -967,20 +974,28 @@ void ReadMeshProbe(void* mesh, HeadPartProbe& probe) {
 // the probe independent of the prefab layout.
 void ReadPartComponents(void* game_object, HeadPartProbe& probe) {
     const MethodContract* get_component = Contract("unity.game_object.get_component");
-    if (!game_object || !get_component || !get_component->resolved ||
-        !g_skinned_mesh_renderer_class.type_object) {
+    if (!game_object || !get_component || !get_component->resolved) {
         return;
     }
-    void* parameters[1]{g_skinned_mesh_renderer_class.type_object};
-    void* renderer = Invoke(get_component, game_object, parameters);
-    if (!renderer) {
-        return;
+    if (g_skinned_mesh_renderer_class.type_object) {
+        void* parameters[1]{g_skinned_mesh_renderer_class.type_object};
+        void* renderer = Invoke(get_component, game_object, parameters);
+        if (renderer) {
+            probe.skinned = true;
+            probe.renderer = renderer;
+            ReadMeshProbe(Invoke(
+                Contract("unity.skinned_mesh_renderer.shared_mesh.get"), renderer, nullptr),
+                probe);
+            return;
+        }
     }
-    probe.skinned = true;
-    probe.renderer = renderer;
-    ReadMeshProbe(Invoke(
-        Contract("unity.skinned_mesh_renderer.shared_mesh.get"), renderer, nullptr),
-        probe);
+    // Hair and head accessories may also render through a plain MeshRenderer;
+    // the shadow-only fallback only needs a Renderer reference, so probe that
+    // too when the node carries no skinned renderer.
+    if (g_mesh_renderer_class.type_object) {
+        void* parameters[1]{g_mesh_renderer_class.type_object};
+        probe.renderer = Invoke(get_component, game_object, parameters);
+    }
 }
 
 void ScanPartNodes(void* transform, int depth, int& visited,
@@ -1734,6 +1749,11 @@ bool ResolveContracts() {
             Log("Resolved class: UnityEngine.SkinnedMeshRenderer");
         } else {
             Log("Class not found: UnityEngine.SkinnedMeshRenderer");
+        }
+        BE_ResolvedClassV1 mesh_renderer_class{};
+        if (g_host->resolve_class(g_host->context, "UnityEngine.CoreModule.dll",
+                "UnityEngine", "MeshRenderer", &mesh_renderer_class) == BE_Result_Ok) {
+            g_mesh_renderer_class = mesh_renderer_class;
         }
 
     }
