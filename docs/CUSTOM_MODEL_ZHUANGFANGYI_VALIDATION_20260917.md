@@ -87,7 +87,7 @@ python tools/CustomModel/convert_hash_lod.py 'artifacts/converter-new-mods/061fe
 
 包已复制到下面两个位置，逐块比较确认字节一致，未计算产物哈希：
 
-- `E:\Dr.Hydra\Better Endfield\artifacts\BetterEndfield-win-x64\custom-model\zhuangfangyi-default-v25.bempoc`
+- `artifacts\BetterEndfield-win-x64\custom-model\zhuangfangyi-default-v25.bempoc`
 - `C:\Users\28377\AppData\Local\BetterEndfield\catalog\custom-model\zhuangfangyi-default-v25.bempoc`
 
 实际生效配置是第二处目录的 `runtime.ini`，加入 `[Adapter.zhuangfy]` 和 `[Mod.zhuangfy]`，

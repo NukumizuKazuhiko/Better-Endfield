@@ -12,7 +12,7 @@ world/UI 各四个 renderer 全部通过身份、骨骼/材质顺序及顶点声
 ## 用户操作
 
 探测版覆盖测试目录的 `modules/BetterEndfield.CustomModel.dll`，无需新增 Mod 包。
-从 `E:\Dr.Hydra\Better Endfield\artifacts\BetterEndfield-win-x64\BetterEndfield.exe` 正常启动游戏。
+从 `artifacts\BetterEndfield-win-x64\BetterEndfield.exe` 正常启动游戏。
 必须是装好探测版后新启动的游戏进程，以捕获首次资源交付。
 
 首轮实际未生成 JSONL；历史公共日志也没有保留探针启用记录，不能据此断定具体原因。

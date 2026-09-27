@@ -74,7 +74,7 @@ python tools/CustomModel/convert_reviewed_draws.py artifacts/converter-new-mods/
 
 实际包为 **70,453,962 字节**，已复制并逐块比较字节：
 
-- `E:\Dr.Hydra\Better Endfield\artifacts\BetterEndfield-win-x64\custom-model\gilberta-default-v25.bempoc`
+- `artifacts\BetterEndfield-win-x64\custom-model\gilberta-default-v25.bempoc`
 - `C:\Users\28377\AppData\Local\BetterEndfield\catalog\custom-model\gilberta-default-v25.bempoc`
 
 实际 catalog 的 `runtime.ini` 新增 `[Adapter.aglina]`、`[Mod.aglina]`，

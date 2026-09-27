@@ -8,6 +8,14 @@ The Windows desktop build and the Android/LSPosed build share one set of module 
 
 ---
 
+## Upstream & Project Origin
+
+This project is derived from [Dr-hydra/Better-Endfield](https://github.com/Dr-hydra/Better-Endfield) (the upstream project). It is **independently maintained and is not an official version of the upstream project, and does not represent the upstream author**. The upstream code, documentation and design remain the work of their original authors; this repository continues to be released under AGPL-3.0-only, with the full license text in [LICENSE](LICENSE) and the upstream and third-party attributions recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+This repository carries independent modifications relative to upstream 3.3.0 (commit `9b1e895`), concentrated on the Android/LSPosed port and its documentation; the details are in the 3.3.20 entry of [CHANGELOG.md](CHANGELOG.md). The upstream commit history is preserved in full so that code provenance — and the original authors' attribution — stays traceable. Upstream changes may still be selectively incorporated when appropriate, but continuous upstream contribution is not the goal.
+
+---
+
 ## Architecture
 
 ```text
@@ -179,3 +187,5 @@ Android debug APKs are built by `.github/workflows/android-build.yml` on GitHub 
 ## Disclaimer
 
 Better Endfield is an unofficial, experimental open-source project. It is not affiliated with, endorsed by, or associated with Hypergryph, Mountain Contour, or GRYPHLINE. Please use responsibly and adhere to all relevant terms of service.
+
+This repository is an independently maintained derivative of [Dr-hydra/Better-Endfield](https://github.com/Dr-hydra/Better-Endfield); upstream attribution, the derivation statement and the current modification status are in [Upstream & Project Origin](#upstream--project-origin) above.

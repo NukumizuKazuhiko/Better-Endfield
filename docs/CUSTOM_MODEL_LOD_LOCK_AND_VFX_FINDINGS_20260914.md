@@ -230,8 +230,8 @@ if (name.find(kActorMeshPrefix) == 0 && name.find("_lod0") != std::string::npos 
 
 1. **编译产物**：MSVC x64 Release 编译通过，0 错误，0 警告。
 2. **部署就绪**：
-   - 源码构建库：[`artifacts/betterendfield-native-build/stage/Release/modules/BetterEndfield.CustomModel.dll`](file:///E:/Dr.Hydra/Better%20Endfield/.worktrees/dev-custom-model-design/artifacts/betterendfield-native-build/stage/Release/modules/BetterEndfield.CustomModel.dll)
-   - 发布目录：[`artifacts/BetterEndfield-win-x64/modules/BetterEndfield.CustomModel.dll`](file:///E:/Dr.Hydra/Better%20Endfield/artifacts/BetterEndfield-win-x64/modules/BetterEndfield.CustomModel.dll)
+   - 源码构建库：[`artifacts/betterendfield-native-build/stage/Release/modules/BetterEndfield.CustomModel.dll`](../.worktrees/dev-custom-model-design/artifacts/betterendfield-native-build/stage/Release/modules/BetterEndfield.CustomModel.dll)
+   - 发布目录：[`artifacts/BetterEndfield-win-x64/modules/BetterEndfield.CustomModel.dll`](../artifacts/BetterEndfield-win-x64/modules/BetterEndfield.CustomModel.dll)
    - 游戏部署目录：[`E:\Better Endfield\modules\BetterEndfield.CustomModel.dll`](file:///E:/Better%20Endfield/modules/BetterEndfield.CustomModel.dll)
 3. **功能闭环**：
    - 彻底消除了因直接调用 IL2CPP 虚方法引发的 SEH 异常；

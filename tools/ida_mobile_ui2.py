@@ -9,7 +9,7 @@ import idaapi
 import idautils
 
 
-OUTPUT = r"E:\Dr.Hydra\Better Endfield\state\mobile-ui-ida-report2.txt"
+OUTPUT = os.path.join(os.path.dirname(os.path.dirname(__file__)), "state", "mobile-ui-ida-report2.txt")
 
 TARGETS = {
     0x033FDF80: "get_inputType_COPY2",

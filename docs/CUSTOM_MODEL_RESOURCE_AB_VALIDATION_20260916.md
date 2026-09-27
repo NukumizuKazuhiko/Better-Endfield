@@ -1,6 +1,6 @@
 # CustomModel 资源交付与 LOD A/B 验证
 
-工作树：`.worktrees/dev-custom-model-design`。测试目录：`E:\Dr.Hydra\Better Endfield\artifacts\BetterEndfield-win-x64`。用户授权直接覆盖、不备份；游戏由用户启动和验证。没有修改主工作树源码，没有计算产物哈希。
+工作树：`.worktrees/dev-custom-model-design`。测试目录：`artifacts\BetterEndfield-win-x64`。用户授权直接覆盖、不备份；游戏由用户启动和验证。没有修改主工作树源码，没有计算产物哈希。
 
 收尾状态：用户确认当前新版原生资源实现开发完成并授权推送开发分支。正式版采用已通过的 B5 行为；临时实验开关、B6 观察代码、新增测试程序和 A/B 构建/部署脚本已撤除。下文保留实验期间的证据，最终去留与未执行项目见末节。
 

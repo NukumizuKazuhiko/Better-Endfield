@@ -1,3 +1,5 @@
+import os
+
 import ida_bytes
 import ida_funcs
 import ida_hexrays
@@ -7,7 +9,7 @@ import idaapi
 import idautils
 
 
-OUTPUT = r"E:\Dr.Hydra\Better Endfield\state\touch-input-ida-report2.txt"
+OUTPUT = os.path.join(os.path.dirname(os.path.dirname(__file__)), "state", "touch-input-ida-report2.txt")
 
 TARGETS = {
     0x03798D80: "InputManager_GetTouchId",

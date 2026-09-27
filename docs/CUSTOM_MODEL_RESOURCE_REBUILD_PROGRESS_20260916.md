@@ -33,6 +33,6 @@ B1～B4 未执行实机 A/B，B6 未取得故障发生时的样本；完整清�
 
 ## 交付范围
 
-正式产物从当前工作树的 `build/stage/Release` 生成，测试目录为 `E:/Dr.Hydra/Better Endfield/artifacts/BetterEndfield-win-x64`。按既有授权直接覆盖、不备份、不计算产物哈希，助手不启动或操作游戏。
+正式产物从当前工作树的 `build/stage/Release` 生成，测试目录为 `artifacts/BetterEndfield-win-x64`。按既有授权直接覆盖、不备份、不计算产物哈希，助手不启动或操作游戏。
 
 本次源码提交和推送目标为 `origin/dev/custom-model-design`，不改动主工作树源码，不合并 main。后续按原设计推进 UI 和包转换器；已知问题及未测边界保留记录，若自然复现再按需调查。

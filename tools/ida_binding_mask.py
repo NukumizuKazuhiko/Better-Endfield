@@ -1,3 +1,5 @@
+import os
+
 import ida_bytes
 import ida_funcs
 import ida_hexrays
@@ -7,7 +9,7 @@ import idaapi
 import idautils
 
 
-OUTPUT = r"E:\Dr.Hydra\Better Endfield\state\binding-mask-ida-report.txt"
+OUTPUT = os.path.join(os.path.dirname(os.path.dirname(__file__)), "state", "binding-mask-ida-report.txt")
 
 # Metadata RVAs from the IL2CPP dump. Several of these land on iFix hotfix
 # stubs that break IDA's function boundaries, so each one is force-defined

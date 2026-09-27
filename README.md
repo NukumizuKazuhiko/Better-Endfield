@@ -6,6 +6,12 @@ Better Endfield 是一个面向《终末地》的模块化运行时。自定义�
 
 Windows 桌面端与 Android/LSPosed 端共用同一份模块源码。自 3.3.0 起，自定义角色外观（BEM）在两端使用同一个标准包。Android 端的挂接方式、游戏内控制面板与诊断通道见下文「Android 端（LSPosed）」。
 
+## 上游与项目来源
+
+本项目派生自 [Dr-hydra/Better-Endfield](https://github.com/Dr-hydra/Better-Endfield)（下称原项目），由当前仓库**独立维护**，**不是原项目的官方版本，也不代表原作者**。原项目的代码、文档与设计归原作者所有；本项目继续以 AGPL-3.0-only 发布，完整许可证见 [LICENSE](LICENSE)，第三方组件与原项目的归属记录见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+当前仓库相对原项目 3.3.0（提交 `9b1e895`）带有独立修改，集中在 Android/LSPosed 端及其文档，明细见 [CHANGELOG.md](CHANGELOG.md) 的 3.3.20 条目。原项目的提交历史完整保留，以便追踪代码来源（含原作者署名）。未来的原项目改动仍会在需要时被有选择地并入，但不以持续向原项目提交为目的。
+
 ## 架构
 
 ```text
@@ -287,5 +293,7 @@ load_host=true
 ## 许可与风险
 
 本项目以 [AGPL-3.0-only](LICENSE) 发布。第三方 MinHook 保留其原许可证，副本位于 `native/shared/third_party/minhook`。
+
+本项目是 [Dr-hydra/Better-Endfield](https://github.com/Dr-hydra/Better-Endfield) 的独立维护派生版本，原项目署名、派生关系与当前修改状态见上文「上游与项目来源」。
 
 Better Endfield 与游戏发行商无关。使用前请备份配置并自行评估账号、客户端完整性和第三方 Mod 冲突风险。游戏更新后如果动态契约不满足，请停止使用对应模块并等待适配。

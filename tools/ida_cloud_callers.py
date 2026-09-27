@@ -1,3 +1,5 @@
+import os
+
 import ida_funcs
 import ida_hexrays
 import ida_lines
@@ -6,7 +8,7 @@ import idaapi
 import idautils
 
 
-OUTPUT = r"E:\Dr.Hydra\Better Endfield\state\cloud-callers-ida-report.txt"
+OUTPUT = os.path.join(os.path.dirname(os.path.dirname(__file__)), "state", "cloud-callers-ida-report.txt")
 
 TARGETS = {
     0x0120A200: "isCloudGame_caller_A",

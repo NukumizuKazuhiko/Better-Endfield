@@ -195,7 +195,7 @@ generation 或 Seek generation 变化都会先清空旧流再绑定新流。策�
 
 ## 界面增强与移动端 UI 模块
 
-`BetterEndfield.UiModule.dll` 提供 PC 客户端下切换移动端/触控 UI 与隐藏 UID 水印的实验性支持。两个功能默认关闭、相互独立；管理器中的开关会立即保存并由 Host 热重载。移动端相关接口与逆向成果详见专题文档：[docs/MOBILE_UI_REVERSING.md](file:///e:/Dr.Hydra/Better%20Endfield/docs/MOBILE_UI_REVERSING.md)。
+`BetterEndfield.UiModule.dll` 提供 PC 客户端下切换移动端/触控 UI 与隐藏 UID 水印的实验性支持。两个功能默认关闭、相互独立；管理器中的开关会立即保存并由 Host 热重载。移动端相关接口与逆向成果详见专题文档：[docs/MOBILE_UI_REVERSING.md](MOBILE_UI_REVERSING.md)。
 
 模块通过 Hook 拦截以下三层运行时契约：
 
