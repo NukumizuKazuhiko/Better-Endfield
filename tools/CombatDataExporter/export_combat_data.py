@@ -35,6 +35,24 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def portable_path(path: Path) -> str:
+    """Render *path* without the machine-specific root.
+
+    Paths under the repository root are rendered relative to it, so metadata that
+    is written into tracked artifacts stays readable on another checkout. A path
+    outside the repository (for example the game installation directory) has no
+    repository-relative spelling, so its absolute form is kept as-is.
+    """
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -429,7 +447,7 @@ def build_buff_source_index(
     if not skill_dir.is_dir() or not buff_dir.is_dir():
         raise FileNotFoundError(
             "JsonData SkillData/BuffData cache is incomplete: " +
-            str(json_data_dir.resolve())
+            portable_path(json_data_dir)
         )
 
     skill_files = {path.stem.lower(): path for path in skill_dir.glob("*.json")}
@@ -960,7 +978,7 @@ def export_web_icons(
 
     manifest = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "source": str(icon_source.resolve()) if icon_source and icon_source.exists() else "",
+        "source": portable_path(icon_source) if icon_source and icon_source.exists() else "",
         "copied": {key: len(value) for key, value in copied.items()},
         "missing": missing,
     }
@@ -1061,9 +1079,9 @@ def refresh_game_tables(
         source = {
             "kind": source_kind,
             "refreshedAt": datetime.now(timezone.utc).isoformat(),
-            "gamePath": str(game_path.resolve()),
-            "baseVfs": str(base_root.resolve()),
-            "persistentVfs": str(persistent_root.resolve())
+            "gamePath": portable_path(game_path),
+            "baseVfs": portable_path(base_root),
+            "persistentVfs": portable_path(persistent_root)
                 if (persistent_root / "VFS").is_dir() else "",
             "tableCount": len(list(table_dir.glob("*.json"))),
             "requiredSha256": {
@@ -1142,13 +1160,13 @@ def refresh_game_json_data(
 def load_table_source_metadata(table_dir: Path) -> Dict[str, Any]:
     path = table_dir.parent / "source-metadata.json"
     if not path.is_file():
-        return {"kind": "offline-snapshot", "tablePath": str(table_dir.resolve())}
+        return {"kind": "offline-snapshot", "tablePath": portable_path(table_dir)}
     try:
         with open(path, "r", encoding="utf-8") as f:
             value = json.load(f)
         return value if isinstance(value, dict) else {}
     except (OSError, json.JSONDecodeError):
-        return {"kind": "unknown", "tablePath": str(table_dir.resolve())}
+        return {"kind": "unknown", "tablePath": portable_path(table_dir)}
 
 
 def extract_icon_pngs(
